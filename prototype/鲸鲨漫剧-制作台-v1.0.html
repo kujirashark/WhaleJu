@@ -15,7 +15,7 @@
   --warn:#ffb547; --warn-soft:rgba(255,181,71,.10); --danger:#ff5c6c; --danger-soft:rgba(255,92,108,.10);
   --key:#b48cff; --key-soft:rgba(180,140,255,.10);
   --r:6px;
-  --font:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  --font:ui-monospace,"SF Mono","Cascadia Mono",Consolas,"Liberation Mono",Menlo,"PingFang SC","Microsoft YaHei",monospace;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 }
 [data-theme="light"]{
@@ -83,7 +83,9 @@ img{display:block}
 .side-foot .bar i{display:block;height:100%;background:var(--accent)}
 .side-foot .sm{font-size:10px;color:var(--ink3);margin-top:6px}
 .main{flex:1;display:flex;flex-direction:column;min-width:0}
-.stream{flex:1;overflow-y:auto;padding:20px 24px}
+.stream{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column}
+.stream>:first-child{margin-top:auto}
+.stream>:last-child{margin-bottom:auto}
 .who{display:flex;gap:10px;margin-bottom:12px}
 .who .av{width:24px;height:24px;border-radius:6px;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .who .av svg{width:15px;height:11px}
