@@ -51,7 +51,6 @@ img{display:block}
 .crumb b{color:var(--ink2);font-weight:500}
 .seg{display:flex;border-radius:6px;overflow:hidden;margin-left:6px}
 .seg button{padding:5px 14px;font-size:12px;color:var(--ink2)}
-.seg button[data-arg="works"]{margin-left:14px}
 .seg button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
 .topbar-r{margin-left:auto;display:flex;align-items:center;gap:14px}
 .status{font-family:var(--mono);font-size:10px;color:var(--ok);letter-spacing:.04em;display:flex;align-items:center;gap:6px;white-space:nowrap}
@@ -261,6 +260,14 @@ img{display:block}
 .plan .pt{font-size:13px;font-weight:600;color:var(--ink)}
 .plan .pv{font-size:12.5px;color:var(--accent);font-variant-numeric:tabular-nums}
 .plan .pd{font-size:11.5px;color:var(--ink3);text-align:right}
+.avatar{background:var(--accent-soft);border:none;color:var(--accent);font-family:var(--font);font-size:12.5px;cursor:pointer;padding:0;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;transition:box-shadow .15s}
+.avatar:hover{box-shadow:0 0 0 2px var(--accent-line)}
+.usermenu{position:absolute;top:52px;right:14px;width:216px;background:var(--panel);border-radius:10px;box-shadow:0 24px 48px -16px rgba(0,0,0,.75);display:none;z-index:60;overflow:hidden}
+.usermenu.open{display:block}
+.um-hd{padding:12px 14px 8px;font-size:12.5px;font-weight:600;color:var(--ink);border-bottom:1px solid var(--line)}
+.um-it{display:block;width:100%;text-align:left;background:none;border:none;font-family:var(--font);font-size:12.5px;color:var(--ink2);padding:9px 14px;cursor:pointer;transition:background .12s}
+.um-it:hover{background:var(--accent-soft);color:var(--accent)}
+.um-ft{padding:8px 14px;font-size:10.5px;color:var(--ink3);border-top:1px solid var(--line);font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
@@ -284,7 +291,15 @@ img{display:block}
     <div class="status"><i></i>本地运行中</div>
     <button class="balance" data-act="recharge" aria-label="充值额度">额度 <b>86.4</b></button>
     <button class="icobtn" data-act="theme" aria-label="切换浅色模式" id="themeBtn"></button>
-    <div class="avatar">林</div>
+    <button class="avatar" data-act="userMenu" aria-label="账户菜单" aria-haspopup="true">林</button>
+    <div class="usermenu" id="usermenu" role="menu">
+      <div class="um-hd">林 · 本地账户</div>
+      <button class="um-it" data-act="umProfile" role="menuitem">个人资料</button>
+      <button class="um-it" data-act="recharge" role="menuitem">我的额度 · 充值</button>
+      <button class="um-it" data-act="umFolder" role="menuitem">打开本地数据文件夹</button>
+      <button class="um-it" data-act="umClean" role="menuitem">清除本机缓存</button>
+      <div class="um-ft">鲸鲨漫剧 v1.0 · LOCAL</div>
+    </div>
   </div>
 </header>
 <main id="v-home" class="view on">
@@ -757,7 +772,11 @@ function act(a,arg){
   if(a==="doExport"){ runExport(); return; }
   if(a==="download"){ toast("已保存到本地「作品库」文件夹"); return; }
   if(a==="copyCap"){ toast(arg + "发布文案已复制，含 AI 生成声明"); return; }
-  if(a==="recharge"){ $("#pay").classList.add("open"); return; }
+  if(a==="recharge"){ $("#usermenu").classList.remove("open"); $("#pay").classList.add("open"); return; }
+  if(a==="userMenu"){ $("#usermenu").classList.toggle("open"); return; }
+  if(a==="umProfile"){ $("#usermenu").classList.remove("open"); toast("本地账户，无云端资料；作品和密钥都在这台电脑上"); return; }
+  if(a==="umFolder"){ $("#usermenu").classList.remove("open"); toast("已打开数据文件夹：文档 / 鲸鲨漫剧"); return; }
+  if(a==="umClean"){ $("#usermenu").classList.remove("open"); toast("缓存已清除，项目和密钥不受影响"); return; }
   if(a==="closePay"){ $("#pay").classList.remove("open"); return; }
   if(a==="paySel"){ S.plan=arg; document.querySelectorAll(".plan").forEach(x=>x.classList.toggle("sel",x.dataset.arg===arg)); return; }
   if(a==="payConfirm"){ $("#pay").classList.remove("open");
@@ -809,8 +828,12 @@ document.addEventListener("click",e=>{
   if(el.dataset.act==="swapRole") e.stopPropagation();
   act(el.dataset.act,el.dataset.arg);
 });
+document.addEventListener("click",e=>{
+  const m=$("#usermenu");
+  if(m.classList.contains("open") && !e.target.closest(".usermenu") && !e.target.closest(".avatar")) m.classList.remove("open");
+});
 document.addEventListener("keydown",e=>{
-  if(e.key==="Escape") $("#modal").classList.remove("open");
+  if(e.key==="Escape") $("#modal").classList.remove("open"), $("#pay").classList.remove("open"), $("#usermenu").classList.remove("open");
   if(e.key==="Enter" && document.activeElement.id==="msg") act("say");
   if((e.key==="Enter"||e.key===" ") && document.activeElement && document.activeElement.dataset && document.activeElement.dataset.act){
     e.preventDefault(); act(document.activeElement.dataset.act,document.activeElement.dataset.arg);
