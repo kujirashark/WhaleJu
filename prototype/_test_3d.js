@@ -29,12 +29,34 @@ const path = require('path');
     '| 步骤:', (await page.locator('.card-hd').first().innerText()).split('\n')[0]);
   await page.locator('.seg button', { hasText: '首页' }).click();
   await page.waitForTimeout(150);
-  await page.locator('.proj').click();
+  await page.locator('.proj').first().click();
   await page.waitForTimeout(150);
   console.log('继续上次视图:', await page.evaluate(() => document.querySelector('.view.on').id),
     '| crumb:', await page.locator('#crumb').innerText());
   console.log('品牌:', await page.locator('.brand .nm').innerText());
+  // 业务闭环：充值 → 作品库
+  console.log('=== 业务闭环 ===');
+  await page.locator('.balance').click();
+  await page.waitForTimeout(200);
+  console.log('充值弹窗:', await page.evaluate(() => document.querySelector('#pay').classList.contains('open')));
+  await page.locator('.plan', { hasText: '创作月包' }).click();
+  await page.waitForTimeout(100);
+  await page.getByRole('button', { name: '确认支付' }).click();
+  await page.waitForTimeout(200);
+  console.log('充值后额度:', await page.locator('.balance b').innerText());
+  await page.locator('.seg button', { hasText: '作品库' }).click();
+  await page.waitForTimeout(200);
+  console.log('作品库视图:', await page.evaluate(() => document.querySelector('.view.on').id),
+    '| 成片卡数:', await page.locator('.workcard').count(),
+    '| crumb:', await page.locator('#crumb').innerText());
+  await page.locator('.workcard').first().locator('.btn', { hasText: '复制发布文案' }).click();
+  await page.waitForTimeout(150);
+  await page.locator('.seg button', { hasText: '首页' }).click();
+  await page.waitForTimeout(150);
+  console.log('首页项目卡数:', await page.locator('.proj').count());
   console.log('=== 制作台 ===');
+  await page.locator('.seg button', { hasText: '制作' }).click();
+  await page.waitForTimeout(150);
   console.log('初始主题:', await page.evaluate(() => document.documentElement.getAttribute('data-theme')));
   // 8 步逐一点击
   const titles = [];

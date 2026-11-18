@@ -238,6 +238,29 @@ img{display:block}
 .home-note{margin-top:26px;font-size:11px;color:var(--ink3);max-width:560px}
 @media (max-width:1024px){.home{padding:28px 16px}}
 @media (max-width:1024px){.side{width:196px}.right{width:262px}.stream{padding:16px}}
+/* ===== 业务闭环：作品库 / 充值 / 项目列表 ===== */
+.balance{background:none;border:none;color:var(--ink2);font:inherit;font-size:11.5px;letter-spacing:.04em;cursor:pointer;padding:6px 10px;border-radius:6px;font-family:var(--font)}
+.balance:hover{background:var(--accent-soft);color:var(--accent)}
+.balance b{color:var(--ink);font-variant-numeric:tabular-nums}
+.works{display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:880px;margin:0 auto;width:100%}
+.workcard{display:flex;gap:14px;background:var(--panel);border-radius:10px;padding:14px;box-shadow:0 18px 34px -18px rgba(0,0,0,.55);align-items:stretch}
+.workcard.empty{align-items:center}
+.wshot{position:relative;width:96px;min-height:128px;border-radius:8px;overflow:hidden;flex-shrink:0}
+.wshot img{width:100%;height:100%;object-fit:cover}
+.wshot.ph{background:var(--panel2);border:1px dashed var(--line2);display:grid;place-items:center}
+.wt{position:absolute;left:6px;bottom:6px;background:rgba(4,18,28,.82);color:#fff;font-size:10px;padding:2px 6px;border-radius:4px;font-variant-numeric:tabular-nums}
+.wk{position:absolute;right:6px;top:6px;background:var(--accent-soft);color:var(--accent);font-size:9.5px;padding:2px 6px;border-radius:4px;border:1px solid var(--accent-line)}
+.wi{display:flex;flex-direction:column;gap:6px;flex:1;min-width:0}
+.wi .t{font-size:13px;color:var(--ink);font-weight:600}
+.wi .s{font-size:11.5px;color:var(--ink3);line-height:1.5}
+.wacts{display:flex;gap:8px;margin-top:auto;flex-wrap:wrap}
+.plans{display:flex;flex-direction:column;gap:8px;margin:12px 0 4px}
+.plan{display:grid;grid-template-columns:auto auto 1fr;gap:4px 12px;align-items:baseline;text-align:left;background:var(--panel2);border:1px solid transparent;border-radius:8px;padding:10px 14px;cursor:pointer;font-family:var(--font);transition:border-color .15s,background .15s}
+.plan:hover{background:var(--accent-soft)}
+.plan.sel{border-color:var(--accent);background:var(--accent-soft)}
+.plan .pt{font-size:13px;font-weight:600;color:var(--ink)}
+.plan .pv{font-size:12.5px;color:var(--accent);font-variant-numeric:tabular-nums}
+.plan .pd{font-size:11.5px;color:var(--ink3);text-align:right}
 </style>
 </head>
 <body>
@@ -254,11 +277,12 @@ img{display:block}
   <nav class="seg" aria-label="页面">
     <button class="on" data-act="view" data-arg="home">首页</button>
     <button data-act="view" data-arg="work">制作</button>
+    <button data-act="view" data-arg="works">作品库</button>
     <button data-act="view" data-arg="settings">模型设置</button>
   </nav>
   <div class="topbar-r">
     <div class="status"><i></i>本地运行中</div>
-    <div class="balance">额度 <b>86.4</b></div>
+    <button class="balance" data-act="recharge" aria-label="充值额度">额度 <b>86.4</b></button>
     <button class="icobtn" data-act="theme" aria-label="切换浅色模式" id="themeBtn"></button>
     <div class="avatar">林</div>
   </div>
@@ -281,7 +305,7 @@ img{display:block}
     </div>
   </div>
   <div class="home-recent">
-    <div class="home-sec">继续上次</div>
+    <div class="home-sec">我的项目 · 2</div>
     <div class="proj" data-act="openProject" role="button" tabindex="0" aria-label="打开项目：人的一生">
       <img src="{{HERO}}" alt="项目《人的一生》的示例剧照">
       <div class="pi">
@@ -290,6 +314,15 @@ img{display:block}
         <div class="pbar2"><i style="width:50%"></i></div>
       </div>
       <span class="chip c-run">4 / 8 步</span>
+    </div>
+    <div class="proj" data-act="view" data-arg="works" role="button" tabindex="0" aria-label="打开作品库：都市逆袭">
+      <img src="{{TEEN}}" alt="项目《都市逆袭》的成片封面">
+      <div class="pi">
+        <div class="t">都市逆袭 · 3 集</div>
+        <div class="s">已完成 · 成片已导出到作品库</div>
+        <div class="pbar2"><i style="width:100%"></i></div>
+      </div>
+      <span class="chip p-ok">已完成</span>
     </div>
   </div>
   <p class="home-note">密钥和素材只存在你的电脑上，调用直接发给模型厂商。没有模型也能先用平台额度试做第一集。</p>
@@ -315,6 +348,61 @@ img{display:block}
   </aside>
 </div>
 </main>
+<main id="v-works" class="view">
+<div class="home">
+  <div class="home-hero">
+    <h1>作品库</h1>
+    <p>导出的成片都存在这台电脑上。下载、复制发布文案，或者再剪一版。每一集都自动带 AI 生成标识和备案材料包。</p>
+  </div>
+  <div class="works">
+    <div class="workcard">
+      <div class="wshot"><img src="{{CHILD}}" alt="第 1 集成片封面"><span class="wt">01:12</span><span class="wk">AI 生成</span></div>
+      <div class="wi">
+        <div class="t">人的一生 · 第 1 集「院子」</div>
+        <div class="s">竖屏 1080×1920 · 412 MB · 2026-11-17 导出</div>
+        <div class="wacts">
+          <button class="btn btn-p" data-act="download">下载</button>
+          <button class="btn btn-s" data-act="copyCap" data-arg="第 1 集">复制发布文案</button>
+          <button class="btn btn-s" data-act="redoShot">再剪一版</button>
+        </div>
+      </div>
+    </div>
+    <div class="workcard">
+      <div class="wshot"><img src="{{TEEN}}" alt="第 2 集成片封面"><span class="wt">01:26</span><span class="wk">AI 生成</span></div>
+      <div class="wi">
+        <div class="t">人的一生 · 第 2 集「站台」</div>
+        <div class="s">竖屏 1080×1920 · 466 MB · 2026-11-17 导出</div>
+        <div class="wacts">
+          <button class="btn btn-p" data-act="download">下载</button>
+          <button class="btn btn-s" data-act="copyCap" data-arg="第 2 集">复制发布文案</button>
+          <button class="btn btn-s" data-act="redoShot">再剪一版</button>
+        </div>
+      </div>
+    </div>
+    <div class="workcard">
+      <div class="wshot"><img src="{{OLD}}" alt="第 3 集成片封面"><span class="wt">01:31</span><span class="wk">AI 生成</span></div>
+      <div class="wi">
+        <div class="t">人的一生 · 第 3 集「长椅」</div>
+        <div class="s">竖屏 1080×1920 · 489 MB · 2026-11-17 导出</div>
+        <div class="wacts">
+          <button class="btn btn-p" data-act="download">下载</button>
+          <button class="btn btn-s" data-act="copyCap" data-arg="第 3 集">复制发布文案</button>
+          <button class="btn btn-s" data-act="redoShot">再剪一版</button>
+        </div>
+      </div>
+    </div>
+    <div class="workcard empty">
+      <div class="wshot ph"></div>
+      <div class="wi">
+        <div class="t">下一个作品从这里开始</div>
+        <div class="s">回首页用一句话新建项目，做完第 8 步就会出现在这里。</div>
+        <div class="wacts"><button class="btn btn-s" data-act="view" data-arg="home">去新建</button></div>
+      </div>
+    </div>
+  </div>
+  <p class="home-note">发布提示：抖音 / 视频号 / B 站都要求勾选“AI 生成内容”，文案里已经帮你写好了声明。</p>
+</div>
+</main>
 <main id="v-settings" class="view">
 <div class="settings">
   <h1>模型设置</h1>
@@ -323,6 +411,21 @@ img{display:block}
   <p class="lead" style="margin-top:22px;font-size:12px">没有设置的能力，在开始之前会明确告诉你，不会直接开始扣钱。</p>
 </div>
 </main>
+<div class="ov" id="pay" role="dialog" aria-modal="true" aria-label="充值额度">
+  <div class="modal">
+    <div class="modal-h">充值额度</div>
+    <div class="modal-b">额度用来生成画面和视频。平台额度不用注册模型账号；如果你有自己的密钥，生成不消耗额度。</div>
+    <div class="plans" id="plans">
+      <button class="plan sel" data-act="paySel" data-arg="p1"><span class="pt">试用包</span><span class="pv">¥49 · 50 额度</span><span class="pd">够做 1 集，先试试</span></button>
+      <button class="plan" data-act="paySel" data-arg="p2"><span class="pt">创作月包</span><span class="pv">¥99 · 200 额度</span><span class="pd">3 集 × 2 轮返工</span></button>
+      <button class="plan" data-act="paySel" data-arg="p3"><span class="pt">年度包</span><span class="pv">¥299 · 1000 额度</span><span class="pd">长期创作最划算</span></button>
+    </div>
+    <div class="modal-f">
+      <button class="btn btn-s" data-act="closePay">先不用</button>
+      <button class="btn btn-p" data-act="payConfirm">确认支付</button>
+    </div>
+  </div>
+</div>
 <div class="ov" id="modal" role="dialog" aria-modal="true">
   <div class="modal">
     <div class="modal-h">确认角色形象？</div>
@@ -539,7 +642,7 @@ function stepBody(){
         ${e.state==="running"?`<div class="progress solid" style="margin-top:16px"><i style="width:${e.pct}%"></i></div><p style="font-size:11.5px;color:var(--ink2);font-family:var(--mono)">合成中 · 第 ${Math.min(3,Math.ceil(e.pct/34))} 集 · ${e.pct}%</p>`:""}
         <div class="acts">
           ${e.state==="idle"?`<button class="btn btn-p" data-act="doExport">开始导出</button>`:""}
-          ${e.state==="done"?`<button class="btn btn-p" data-act="download">下载视频</button><button class="btn btn-s" data-act="doExport">重新导出</button>`:""}
+          ${e.state==="done"?`<button class="btn btn-p" data-act="download">下载视频</button><button class="btn btn-s" data-act="view" data-arg="works">去作品库</button><button class="btn btn-s" data-act="doExport">重新导出</button>`:""}
           ${e.state==="running"?`<button class="btn btn-s" disabled>导出中…</button>`:""}
           <span style="font-size:11px;color:var(--ink3);font-family:var(--mono)">3 集 · 约 2 分 10 秒 · 约 46 MB</span>
         </div>
@@ -606,9 +709,9 @@ function render(){ renderSide(); renderStream(); renderRight(); renderSettings()
 function act(a,arg){
   if(a==="goto"){ S.step=Math.max(0,Math.min(7,Number(arg))); render(); return; }
   if(a==="view"){ S.view=arg;
-    ["home","work","settings"].forEach(v=>{const el=$("#v-"+v); if(el) el.classList.toggle("on",arg===v);});
+    ["home","work","works","settings"].forEach(v=>{const el=$("#v-"+v); if(el) el.classList.toggle("on",arg===v);});
     document.querySelectorAll('.seg button').forEach(b=>b.classList.toggle("on",b.dataset.arg===arg));
-    $("#crumb").innerHTML = arg==="home" ? "首页" : (arg==="settings" ? "设置" : '项目 / <b>人的一生</b> · 第 1 集');
+    $("#crumb").innerHTML = (arg==="work") ? '项目 / <b>人的一生</b> · 第 1 集' : "";
     return; }
   if(a==="create"){ const v=$("#idea").value.trim();
     if(!v){ toast("先写一句你的想法，或者点下面的题材模板"); $("#idea").focus(); return; }
@@ -652,7 +755,16 @@ function act(a,arg){
   if(a==="redoShot"){ toast("正在只重做这一段，其他镜头不动"); return; }
   if(a==="pickRatio"){ S.ratio=arg; document.querySelectorAll('[data-act="pickRatio"]').forEach(x=>x.classList.toggle("sel",x.dataset.arg===arg)); return; }
   if(a==="doExport"){ runExport(); return; }
-  if(a==="download"){ toast("已保存到「人的一生 / 导出」文件夹"); return; }
+  if(a==="download"){ toast("已保存到本地「作品库」文件夹"); return; }
+  if(a==="copyCap"){ toast(arg + "发布文案已复制，含 AI 生成声明"); return; }
+  if(a==="recharge"){ $("#pay").classList.add("open"); return; }
+  if(a==="closePay"){ $("#pay").classList.remove("open"); return; }
+  if(a==="paySel"){ S.plan=arg; document.querySelectorAll(".plan").forEach(x=>x.classList.toggle("sel",x.dataset.arg===arg)); return; }
+  if(a==="payConfirm"){ $("#pay").classList.remove("open");
+    const add={p1:50,p2:200,p3:1000}[S.plan]||50;
+    S.credits=(S.credits||86.4)+add;
+    document.querySelector(".balance b").textContent=S.credits.toFixed(1);
+    toast("充值成功，额度已到账 +" + add); return; }
   if(a==="pickModel"){ const [g,v]=arg.split(":"); S.settings[g]=v; renderSettings(); return; }
   if(a==="testKey"){ toast("连接测试通过：可以用，延迟 320ms"); return; }
   if(a==="saveSettings"){ toast("设置已保存（密钥加密存在本机）"); return; }
@@ -682,7 +794,7 @@ function runExport(){
   S.exp={state:"running",pct:0}; renderStream();
   const t=setInterval(()=>{
     S.exp.pct+=8;
-    if(S.exp.pct>=100){ S.exp.pct=100; S.exp.state="done"; clearInterval(t); renderStream(); toast("导出完成，可以下载了"); return; }
+    if(S.exp.pct>=100){ S.exp.pct=100; S.exp.state="done"; clearInterval(t); renderStream(); toast("导出完成，已存入作品库"); return; }
     renderStream();
   },180);
 }
