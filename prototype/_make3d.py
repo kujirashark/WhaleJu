@@ -92,28 +92,9 @@ PARALLAX = r"""
 /* 3D 视差与平面降级 */
 (function(){
   var root=document.documentElement, body=document.body;
-  var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if(reduce) body.classList.add('flat');
-  var btn=document.getElementById('dim3dBtn');
-  function sync(){
-    if(!btn) return;
-    var flat=body.classList.contains('flat');
-    btn.innerHTML=flat
-      ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="1"/></svg>'
-      : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M12 2 21 7v10l-9 5-9-5V7l9-5Z"/><path d="m3 7 9 5 9-5M12 12v10"/></svg>';
-    btn.setAttribute('aria-label',flat?'切换到 3D 视角':'切换到平面视图');
-    btn.setAttribute('title',flat?'切换到 3D 视角':'切换到平面视图');
-    if(flat){root.style.setProperty('--px','0deg');root.style.setProperty('--py','0deg');}
-  }
-  if(btn && !btn.dataset.bound){
-    btn.dataset.bound='1';
-    btn.addEventListener('click',function(e){
-      e.stopPropagation();
-      body.classList.toggle('flat');
-      sync();
-    });
-  }
-  sync();
+  var flat_default=true;
+  body.classList.add('flat');
+  if(flat_default){root.style.setProperty('--px','0deg');root.style.setProperty('--py','0deg');}
   var raf=0;
   document.addEventListener('mousemove',function(e){
     if(body.classList.contains('flat')||raf) return;
@@ -138,13 +119,9 @@ def build(src, css, out_tpl, out_html, imgmap, app=False):
     if app:
         anchor = '<button class="icobtn" data-act="theme"'
         assert anchor in s
-        s = s.replace(anchor, BTN + anchor, 1)
-        # act() 内增加 dim3d 分支（按钮由独立监听器处理，这里兜底）
-        s = s.replace('  if(a==="theme"){', '  if(a==="dim3d"){ document.body.classList.toggle("flat"); toast(document.body.classList.contains("flat")?"已切换到平面视图":"已切换到 3D 视角"); return; }\n  if(a==="theme"){', 1)
     else:
         anchor = '<button class="icobtn" id="themeBtn"'
         assert anchor in s
-        s = s.replace(anchor, BTN + anchor, 1)
     open(out_tpl, 'w', encoding='utf-8').write(s)
     for k, v in imgmap.items():
         s = s.replace('{{' + k + '}}', v)

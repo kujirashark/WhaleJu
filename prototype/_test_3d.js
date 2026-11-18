@@ -95,16 +95,8 @@ const path = require('path');
   await clickText('测试连接');
   await clickText('保存设置');
   await shot('settings');
-  // 3D 切换
-  const t3d = await page.evaluate(() => getComputedStyle(document.querySelector('.bench')).transform);
-  console.log('3D transform:', t3d.slice(0, 58));
-  await page.locator('#dim3dBtn').click();
-  await page.waitForTimeout(200);
-  console.log('平面模式:', await page.evaluate(() => document.body.classList.contains('flat')));
-  await shot('flat');
-  await page.locator('#dim3dBtn').click();
-  await page.waitForTimeout(200);
-  console.log('恢复 3D:', await page.evaluate(() => !document.body.classList.contains('flat')));
+  // 平面默认确认
+  console.log('默认平面:', await page.evaluate(() => document.body.classList.contains('flat')));
   // 主题
   await page.locator('.seg button', { hasText: '制作' }).click();
   await page.locator('.side .st').nth(2).click();
@@ -140,8 +132,6 @@ const path = require('path');
   await site.evaluate(() => document.querySelector('#steps').scrollIntoView());
   await site.waitForTimeout(900);
   await site.screenshot({ path: '_w_site_steps.png' });
-  const s3d = await site.evaluate(() => getComputedStyle(document.querySelector('.step-grid')).transform);
-  console.log('官网 3D transform:', s3d.slice(0, 58));
   console.log('官网 JS 错误:', serr.length ? serr.join(' | ') : '无');
   await browser.close();
   if (errors.length || serr.length || overflow) process.exit(1);
