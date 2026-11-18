@@ -14,7 +14,7 @@ body.flat *,body.flat *::before,body.flat *::after{transform:none!important;box-
 body.flat .btn3d{color:var(--ink3);border-color:var(--line2)}
 .bench{
   transform-style:preserve-3d;
-  transform:rotateX(calc(5deg + var(--py,0deg))) rotateY(calc(-4deg + var(--px,0deg)));
+  transform:rotateX(calc(9deg + var(--py,0deg))) rotateY(calc(-7deg + var(--px,0deg)));
   transform-origin:50% 28%;
   transition:transform .35s cubic-bezier(.22,.8,.25,1);
 }
@@ -25,13 +25,13 @@ body.flat .btn3d{color:var(--ink3);border-color:var(--line2)}
 .right{box-shadow:-14px 0 34px -20px rgba(0,0,0,.75)}
 .side .st{transition:box-shadow .25s ease,background .25s ease}
 .side .st.done .mk{box-shadow:0 0 8px rgba(47,224,138,.25)}
-.side .st.now{box-shadow:6px 8px 20px -10px rgba(0,0,0,.8)}
+.side .st.now{box-shadow:8px 10px 26px -10px rgba(0,0,0,.9)}
 .side .st.now .mk{box-shadow:0 0 12px var(--accent-line)}
 .card{
-  box-shadow:0 30px 55px -22px rgba(0,0,0,.78),0 0 0 1px var(--line);
+  box-shadow:0 36px 64px -20px rgba(0,0,0,.88),0 0 0 1px var(--line);
   transition:box-shadow .35s ease;
 }
-.card:hover{box-shadow:0 38px 66px -20px rgba(0,0,0,.85),0 0 0 1px var(--accent-line)}
+.card:hover{box-shadow:0 46px 80px -18px rgba(0,0,0,.92),0 0 0 1px var(--accent-line)}
 .acts .btn{transition:filter .15s,border-color .15s,color .15s}
 .acts .btn:hover{filter:brightness(1.12)}
 .role{transition:box-shadow .35s}
@@ -41,7 +41,7 @@ body.flat .btn3d{color:var(--ink3);border-color:var(--line2)}
 .table tbody tr:hover{background:var(--panel2)}
 .progress i.on{box-shadow:0 0 12px var(--accent-line),0 2px 6px rgba(0,0,0,.5)}
 /* 播放器厚度用两层偏移阴影表达，不依赖 translateZ */
-.player{box-shadow:0 26px 50px -16px rgba(0,0,0,.85),14px 14px 0 var(--panel2),15px 15px 0 var(--line2)}
+.player{box-shadow:0 26px 50px -16px rgba(0,0,0,.85),18px 18px 0 var(--panel2),19px 19px 0 var(--line2)}
 .right .row{transition:background .2s}
 .right .row:hover{background:var(--panel2)}
 .ch{transition:border-color .15s,background .15s}
@@ -58,38 +58,38 @@ body.flat *,body.flat *::before,body.flat *::after{transform:none!important;box-
 .btn3d{color:var(--accent);border-color:var(--accent-line)}
 body.flat .btn3d{color:var(--ink3);border-color:var(--line2)}
 .hero{transform-style:preserve-3d;perspective:1200px}
-.hero .wrap{transform:translateZ(62px) rotateY(calc(var(--px,0deg) * .3)) rotateX(calc(var(--py,0deg) * .3));transition:transform .35s cubic-bezier(.22,.8,.25,1)}
+.hero .wrap{transform:translateZ(70px) rotateY(calc(var(--px,0deg) * .4)) rotateX(calc(var(--py,0deg) * .4));transition:transform .35s cubic-bezier(.22,.8,.25,1)}
 .hero:after{
   content:"";position:absolute;left:-25%;right:-25%;bottom:-16%;height:58%;pointer-events:none;z-index:0;
   background-image:linear-gradient(var(--accent-line) 1px,transparent 1px),linear-gradient(90deg,var(--accent-line) 1px,transparent 1px);
   background-size:56px 56px;
   transform:perspective(600px) rotateX(66deg) translateY(8%);
-  transform-origin:50% 100%;opacity:.3;
+  transform-origin:50% 100%;opacity:.38;
   -webkit-mask-image:linear-gradient(to top,#000,transparent 88%);
   mask-image:linear-gradient(to top,#000,transparent 88%);
 }
 .hero-shot{transform-style:preserve-3d}
 .hero-shot figure{
-  transform:translateZ(24px) rotateX(2.4deg) rotateY(calc(var(--px,0deg) * .18));
-  box-shadow:0 46px 80px -30px rgba(0,0,0,.9),12px 12px 0 var(--panel2),13px 13px 0 var(--line);
+  transform:translateZ(30px) rotateX(3deg) rotateY(calc(var(--px,0deg) * .18));
+  box-shadow:0 54px 90px -28px rgba(0,0,0,.9),16px 16px 0 var(--panel2),17px 17px 0 var(--line);
   transition:transform .4s cubic-bezier(.22,.8,.25,1);
 }
 .stages,.step-grid,.specs{transform-style:preserve-3d}
 .stage{transform:translateZ(0);transition:transform .35s cubic-bezier(.22,.8,.25,1),box-shadow .35s}
-.stage:hover{transform:translateZ(26px) rotateY(-4deg);box-shadow:0 22px 38px -14px rgba(0,0,0,.8);z-index:2}
-.step-grid{transform:rotateX(6deg) rotateY(-4deg);transform-origin:50% 50%}
-.stages{transform:rotateX(2.5deg)}
-.specs{transform:rotateX(3deg) rotateY(-2deg)}
+.stage:hover{transform:translateZ(34px) rotateY(-6deg);box-shadow:0 22px 38px -14px rgba(0,0,0,.8);z-index:2}
+.step-grid{transform:rotateX(10deg) rotateY(-7deg);transform-origin:50% 50%}
+.stages{transform:rotateX(4deg)}
+.specs{transform:rotateX(5deg) rotateY(-3deg)}
 .step-cell{transform:translateZ(0);transition:transform .3s cubic-bezier(.22,.8,.25,1),box-shadow .3s}
-.step-cell:hover{transform:translateZ(28px) rotateX(-2deg);box-shadow:0 22px 40px -16px rgba(0,0,0,.75);z-index:2}
+.step-cell:hover{transform:translateZ(36px) rotateX(-3deg);box-shadow:0 22px 40px -16px rgba(0,0,0,.75);z-index:2}
 .step-cell:after{transform:translateZ(2px)}
-.feature img{transform:translateZ(20px) rotateY(1.5deg);box-shadow:0 30px 60px -24px rgba(0,0,0,.8);transition:transform .4s}
-.feature.rev img{transform:translateZ(20px) rotateY(-1.5deg)}
-.feature img:hover{transform:translateZ(40px) rotateY(0deg)}
+.feature img{transform:translateZ(26px) rotateY(2.5deg);box-shadow:0 30px 60px -24px rgba(0,0,0,.8);transition:transform .4s}
+.feature.rev img{transform:translateZ(26px) rotateY(-2.5deg)}
+.feature img:hover{transform:translateZ(44px) rotateY(0deg)}
 .dark{transform-style:preserve-3d}
-.dark-shot{transform:translateZ(18px) rotateX(1.5deg);box-shadow:0 40px 70px -30px rgba(0,0,0,.9)}
+.dark-shot{transform:translateZ(24px) rotateX(2.5deg);box-shadow:0 40px 70px -30px rgba(0,0,0,.9)}
 .spec{transform:translateZ(0);transition:transform .3s,box-shadow .3s}
-.spec:hover{transform:translateZ(20px);box-shadow:0 16px 30px -12px rgba(0,0,0,.6);z-index:2}
+.spec:hover{transform:translateZ(26px);box-shadow:0 16px 30px -12px rgba(0,0,0,.6);z-index:2}
 .cta-band{transform-style:preserve-3d}
 .cta-band .wrap{transform:translateZ(24px)}
 """
@@ -124,8 +124,8 @@ PARALLAX = r"""
     if(body.classList.contains('flat')||raf) return;
     raf=requestAnimationFrame(function(){
       var x=(e.clientX/window.innerWidth-.5)*2, y=(e.clientY/window.innerHeight-.5)*2;
-      root.style.setProperty('--px',(x*4).toFixed(2)+'deg');
-      root.style.setProperty('--py',(-y*3).toFixed(2)+'deg');
+      root.style.setProperty('--px',(x*6).toFixed(2)+'deg');
+      root.style.setProperty('--py',(-y*4.5).toFixed(2)+'deg');
       raf=0;
     });
   },{passive:true});
