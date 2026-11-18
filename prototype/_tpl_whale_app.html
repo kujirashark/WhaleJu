@@ -261,6 +261,7 @@ img{display:block}
 .plan .pt{font-size:13px;font-weight:600;color:var(--ink)}
 .plan .pv{font-size:12.5px;color:var(--accent);font-variant-numeric:tabular-nums}
 .plan .pd{font-size:11.5px;color:var(--ink3);text-align:right}
+.seg-div{width:1px;height:16px;background:var(--line2);margin:0 6px;flex-shrink:0}
 </style>
 </head>
 <body>
@@ -273,12 +274,13 @@ img{display:block}
     </svg>
     <span class="nm">鲸鲨漫剧</span><span class="ver">LOCAL</span>
   </div>
-  <div class="crumb" id="crumb">首页</div>
+  <div class="crumb" id="crumb"></div>
   <nav class="seg" aria-label="页面">
     <button class="on" data-act="view" data-arg="home">首页</button>
     <button data-act="view" data-arg="work">制作</button>
+    <span class="seg-div" role="presentation"></span>
     <button data-act="view" data-arg="works">作品库</button>
-    <button data-act="view" data-arg="settings">模型设置</button>
+    <button data-act="view" data-arg="settings">设置</button>
   </nav>
   <div class="topbar-r">
     <div class="status"><i></i>本地运行中</div>

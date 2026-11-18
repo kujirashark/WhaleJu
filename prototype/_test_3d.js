@@ -125,7 +125,7 @@ const path = require('path');
   }
   console.log('右栏页签: OK');
   // 设置页
-  await page.locator('.seg button', { hasText: '模型设置' }).click();
+  await page.locator('.seg button', { hasText: '设置' }).click();
   await page.waitForTimeout(150);
   console.log('设置组数:', await page.locator('#settingsBody .grp').count());
   await page.locator('#settingsBody .ch').nth(1).click();
