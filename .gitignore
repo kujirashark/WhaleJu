@@ -1,0 +1,6 @@
+node_modules/
+prototype/node_modules/
+prototype/_shot*.png
+prototype/_v_*.png
+prototype/_check.js
+prototype/assets/*.png

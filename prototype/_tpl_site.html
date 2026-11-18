@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>漫剧工场 — 把一生，拍成一部剧</title>
+<style>
+:root{
+  --ink:#1d1d1f; --ink-2:#6e6e73; --ink-3:#86868b;
+  --paper:#ffffff; --wash:#f5f5f7; --line:#d2d2d7;
+  --blue:#0071e3; --blue-hover:#0077ed;
+  --font:"SF Pro Display","SF Pro Text",-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{font-family:var(--font);background:#fff;color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.47;overflow-x:hidden}
+a{color:var(--blue);text-decoration:none}
+a:hover{text-decoration:underline}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.nav{position:sticky;top:0;z-index:40;height:52px;background:rgba(251,251,253,.72);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid rgba(0,0,0,.08)}
+.nav-in{max-width:1024px;margin:0 auto;height:100%;display:flex;align-items:center;padding:0 22px}
+.nav .mark{font-size:16px;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin-right:28px;flex-shrink:0}
+.nav a.item{font-size:12px;color:rgba(0,0,0,.8);letter-spacing:-.01em;flex:1;text-align:center;margin-right:0}
+.nav a.item:hover{color:#000;text-decoration:none}
+.nav .sp{margin-left:auto}
+.nav .nav-cta{background:var(--blue);color:#fff;font-size:12px;padding:6px 14px;border-radius:980px;line-height:1.2}
+.nav .nav-cta:hover{background:var(--blue-hover);text-decoration:none}
+.wrap{max-width:1024px;margin:0 auto;padding:0 22px}
+.eyebrow{color:var(--blue);font-size:19px;font-weight:600}
+.h1{font-size:clamp(42px,7vw,76px);font-weight:600;letter-spacing:-.025em;line-height:1.04;margin-top:8px}
+.h2{font-size:clamp(30px,4.4vw,52px);font-weight:600;letter-spacing:-.022em;line-height:1.06}
+.lead{font-size:clamp(17px,2vw,23px);color:var(--ink-3);letter-spacing:-.012em;line-height:1.42;font-weight:400}
+.mt12{margin-top:12px}.mt20{margin-top:20px}.mt28{margin-top:28px}.mt40{margin-top:40px}.mt56{margin-top:56px}
+.center{text-align:center}
+.btn{display:inline-flex;align-items:center;justify-content:center;height:46px;padding:0 26px;border-radius:980px;font-size:17px;letter-spacing:-.01em;transition:background .2s,transform .2s}
+.btn-primary{background:var(--blue);color:#fff}
+.btn-primary:hover{background:var(--blue-hover);text-decoration:none}
+.btn-ghost{color:var(--blue)}
+.btn-ghost:hover{text-decoration:underline}
+.cta-row{display:flex;gap:24px;justify-content:center;align-items:center;margin-top:30px;flex-wrap:wrap}
+/* 首屏 */
+.hero{padding:88px 0 0;text-align:center}
+.hero .lead{max-width:700px;margin:20px auto 0}
+.hero-shot{margin:60px auto 0;max-width:1180px;padding:0 22px}
+.hero-shot figure{border-radius:24px;overflow:hidden;position:relative;box-shadow:0 40px 90px -20px rgba(0,0,0,.35)}
+.hero-shot img{width:100%;display:block;aspect-ratio:16/9;object-fit:cover}
+.hero-shot figcaption{position:absolute;left:28px;bottom:24px;color:#fff;font-size:13px;letter-spacing:.01em;text-shadow:0 1px 12px rgba(0,0,0,.6)}
+.hero-shot figcaption b{font-size:17px;display:block;font-weight:600;letter-spacing:-.01em;margin-bottom:2px}
+/* 年龄段条 */
+.stages{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-top:44px}
+.stage{position:relative;border-radius:14px;overflow:hidden;cursor:default}
+.stage img{width:100%;aspect-ratio:3/4;object-fit:cover;display:block;transition:transform .6s cubic-bezier(.28,.11,.32,1)}
+.stage:hover img{transform:scale(1.05)}
+.stage span{position:absolute;left:12px;bottom:10px;color:#fff;font-size:14px;font-weight:600;letter-spacing:-.01em;text-shadow:0 1px 10px rgba(0,0,0,.7)}
+.stage em{position:absolute;left:12px;top:10px;color:rgba(255,255,255,.85);font-size:11px;font-style:normal;letter-spacing:.02em;text-shadow:0 1px 10px rgba(0,0,0,.7)}
+/* 区块 */
+.section{padding:112px 0 0}
+.section.tight{padding-top:88px}
+.step-list{margin-top:52px;border-top:1px solid var(--line)}
+.step-row{display:grid;grid-template-columns:48px 1fr 260px;gap:24px;align-items:baseline;padding:22px 0;border-bottom:1px solid var(--line)}
+.step-row .n{font-size:13px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.step-row h4{font-size:22px;font-weight:600;letter-spacing:-.015em}
+.step-row p{font-size:15px;color:var(--ink-2);margin-top:4px}
+.step-row .out{font-size:13px;color:var(--ink-3);text-align:right}
+.feature{display:grid;grid-template-columns:1fr 1fr;gap:60px;align-items:center;margin-top:88px}
+.feature.rev .txt{order:2}
+.feature.rev .img{order:1}
+.feature img{width:100%;border-radius:20px;display:block;box-shadow:0 30px 60px -24px rgba(0,0,0,.3)}
+.feature h3{font-size:clamp(26px,3.2vw,38px);font-weight:600;letter-spacing:-.02em;line-height:1.1}
+.feature p{font-size:17px;color:var(--ink-2);margin-top:16px;line-height:1.5}
+.kv{margin-top:24px;border-top:1px solid var(--line)}
+.kv div{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--line);font-size:14px;color:var(--ink-2)}
+.kv b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+/* 黑区 */
+.dark{background:#000;color:#f5f5f7;margin-top:120px;padding:110px 0 0;overflow:hidden}
+.dark .lead{color:#a1a1a6}
+.dark-shot{margin-top:56px;position:relative}
+.dark-shot img{width:100%;height:min(64vw,560px);object-fit:cover;border-radius:24px 24px 0 0;display:block;opacity:.92}
+.dark-shot .cap{position:absolute;left:0;right:0;bottom:0;padding:60px 28px 28px;background:linear-gradient(to top,rgba(0,0,0,.85),rgba(0,0,0,0))}
+.dark-shot .cap p{font-size:clamp(20px,2.6vw,30px);font-weight:600;letter-spacing:-.015em;max-width:760px;line-height:1.3}
+/* 规格 */
+.specs{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-top:56px;border-top:1px solid var(--line)}
+.spec{padding:26px 22px 26px 0;border-bottom:1px solid var(--line)}
+.spec h4{font-size:17px;font-weight:600;letter-spacing:-.01em}
+.spec p{font-size:13.5px;color:var(--ink-3);margin-top:6px;line-height:1.5}
+/* CTA */
+.cta-band{background:var(--wash);margin-top:110px;padding:96px 0;text-align:center}
+.cta .lead{max-width:620px;margin:16px auto 0}
+footer{padding:30px 0 48px;font-size:12px;color:var(--ink-3)}
+footer .wrap{display:flex;gap:24px;justify-content:space-between;flex-wrap:wrap}
+footer p{max-width:720px;line-height:1.6}
+.reveal{opacity:0;transform:translateY(28px);transition:opacity .9s cubic-bezier(.28,.11,.32,1),transform .9s cubic-bezier(.28,.11,.32,1)}
+.reveal.in{opacity:1;transform:none}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}.reveal{opacity:1;transform:none;transition:none}}
+@media (max-width:900px){
+  .stages{grid-template-columns:repeat(2,1fr)}
+  .feature{grid-template-columns:1fr;gap:28px}
+  .feature.rev .txt{order:1}.feature.rev .img{order:2}
+  .specs{grid-template-columns:repeat(2,1fr)}
+  .step-row{grid-template-columns:32px 1fr}
+  .step-row .out{display:none}
+  .nav-in{gap:14px;overflow-x:auto}
+}
+</style>
+</head>
+<body>
+<h1 class="sr-only">漫剧工场：把一生，拍成一部剧</h1>
+<nav class="nav">
+  <div class="nav-in">
+    <a class="mark" href="#">漫剧工场</a>
+    <a class="item" href="#stages">一辈子</a>
+    <a class="item" href="#steps">八步</a>
+    <a class="item" href="#privacy">隐私</a>
+    <a class="item" href="#specs">细节</a>
+    <span class="sp"></span>
+    <a class="nav-cta" href="#">免费开始</a>
+  </div>
+</nav>
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">人的一生</p>
+    <h1 class="h1">把一生，<br>拍成一部剧</h1>
+    <p class="lead">从八岁院子里的那个下午，到七十岁公园长椅上的黄昏。你说想讲谁的一生，它一集一集做给你看。</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#steps">看它怎么做</a>
+      <a class="btn btn-ghost" href="#stages">先看五个年龄 ›</a>
+    </div>
+  </div>
+  <div class="hero-shot">
+    <figure>
+      <img src="{{HERO}}" alt="示例剧照：三代人站在老屋门前，夕阳照进院子">
+      <figcaption><b>示例剧照 · 人的一生</b>第 3 集《回家》</figcaption>
+    </figure>
+  </div>
+</header>
+<section class="wrap section tight" id="stages">
+  <div class="center reveal">
+    <h2 class="h2">一个人，五个年龄</h2>
+    <p class="lead mt12" style="max-width:640px;margin-left:auto;margin-right:auto">同一个角色，从幼年到老年。确认形象之后，每一集都用同一张脸，不会第五集换人。</p>
+  </div>
+  <div class="stages reveal">
+    <div class="stage"><img src="{{CHILD}}" alt="示例剧照：八岁男孩在老院子里奔跑"><em>第 1 集</em><span>八岁</span></div>
+    <div class="stage"><img src="{{TEEN}}" alt="示例剧照：十八岁少年在火车站台"><em>第 2 集</em><span>十八岁</span></div>
+    <div class="stage"><img src="{{ADULT}}" alt="示例剧照：二十八岁青年在深夜写字楼"><em>第 3 集</em><span>二十八岁</span></div>
+    <div class="stage"><img src="{{MID}}" alt="示例剧照：四十五岁中年男性在医院走廊"><em>第 4 集</em><span>四十五岁</span></div>
+    <div class="stage"><img src="{{OLD}}" alt="示例剧照：七十岁老人坐在公园长椅上"><em>第 5 集</em><span>七十岁</span></div>
+  </div>
+</section>
+<section class="wrap section" id="steps">
+  <div class="reveal">
+    <h2 class="h2">八步，把一生讲完</h2>
+    <p class="lead mt12" style="max-width:680px">每一步都给你看结果。你只需要在三件事上点头：剧本、角色、前 30 秒。</p>
+  </div>
+  <div class="step-list reveal">
+    <div class="step-row"><span class="n">01</span><div><h4>写剧本</h4><p>给它一句话，它给你三集大纲，标出每一集的情绪高点。</p></div><span class="out">3 集 · 8 个亮点</span></div>
+    <div class="step-row"><span class="n">02</span><div><h4>确认剧本</h4><p>看完大纲说"可以"，或者直接说哪里不对。</p></div><span class="out">你确认后才继续</span></div>
+    <div class="step-row"><span class="n">03</span><div><h4>角色形象</h4><p>每个年龄出一组参考图，选一张，后面的所有镜头都用它。</p></div><span class="out">5 个年龄 · 各 3 张</span></div>
+    <div class="step-row"><span class="n">04</span><div><h4>确认角色形象</h4><p>锁定之前会告诉你后果：改形象要重做已经生成的镜头。</p></div><span class="out">必须你确认</span></div>
+    <div class="step-row"><span class="n">05</span><div><h4>拆分镜头</h4><p>把剧本拆成 12 个镜头，标出哪几个是重要镜头。</p></div><span class="out">12 个镜头 · 预计 173 元</span></div>
+    <div class="step-row"><span class="n">06</span><div><h4>生成画面</h4><p>重要镜头用好的模型，过渡镜头用便宜的。失败自动换一家再试。</p></div><span class="out">失败不计费</span></div>
+    <div class="step-row"><span class="n">07</span><div><h4>看成片</h4><p>先看前 30 秒。不满意只重做这一段，不用整集重来。</p></div><span class="out">单段可重做</span></div>
+    <div class="step-row"><span class="n">08</span><div><h4>导出视频</h4><p>竖屏 MP4，带字幕和 AI 生成标识，直接能发。</p></div><span class="out">1080×1920</span></div>
+  </div>
+</section>
+<section class="wrap section" id="privacy">
+  <div class="feature reveal">
+    <div class="txt">
+      <h3>重要的镜头用好的，<br>过渡的用便宜的</h3>
+      <p>同样一条片子，全部用同一个模型，比按镜头分配大约多花三成。系统按镜头的重要程度自动分配，并且告诉你为什么这么分。</p>
+      <div class="kv">
+        <div><span>重要镜头 4 个 · 可灵</span><b>约 96 元</b></div>
+        <div><span>过渡镜头 8 个 · 海螺</span><b>约 77 元</b></div>
+        <div><span>配音 · 在你电脑上</span><b>0 元</b></div>
+      </div>
+    </div>
+    <div class="img"><img src="{{CHILD}}" alt="示例画面：童年场景"></div>
+  </div>
+  <div class="feature rev reveal">
+    <div class="txt">
+      <h3>生成的每一段，<br>都能单独重做</h3>
+      <p>整集二十多个镜头，只要有一处不满意，就只重做那一条。不用整集重来，也不多收钱。</p>
+      <div class="kv">
+        <div><span>失败重试</span><b>不收费</b></div>
+        <div><span>废弃结果</span><b>不收费</b></div>
+        <div><span>关掉再打开</span><b>从断点继续</b></div>
+      </div>
+    </div>
+    <div class="img"><img src="{{ADULT}}" alt="示例画面：深夜写字楼"></div>
+  </div>
+</section>
+<section class="dark" id="privacy2">
+  <div class="wrap center reveal">
+    <h2 class="h2">密钥和素材，<br>只存在你自己的电脑上</h2>
+    <p class="lead mt12" style="max-width:660px;margin-left:auto;margin-right:auto">你填的 API 密钥加密后留在本机，调用直接发给模型厂商，不经过我们的服务器。也可以全部在你自己的电脑上跑。</p>
+  </div>
+  <div class="wrap">
+    <div class="dark-shot reveal">
+      <img src="{{OLD}}" alt="示例剧照：七十岁老人看着夕阳">
+      <div class="cap"><p>"这辈子没什么大事，就是些下午、几趟车、一些人。"</p></div>
+    </div>
+  </div>
+</section>
+<section class="wrap section" id="specs">
+  <div class="center reveal">
+    <h2 class="h2">具体一点</h2>
+  </div>
+  <div class="specs reveal">
+    <div class="spec"><h4>用自己的密钥</h4><p>可灵、即梦、DeepSeek 等，填上就能用</p></div>
+    <div class="spec"><h4>用平台额度</h4><p>不用注册任何平台账号就能开始</p></div>
+    <div class="spec"><h4>在你电脑上跑</h4><p>Ollama、ComfyUI 都可以接</p></div>
+    <div class="spec"><h4>失败不计费</h4><p>失败的、废弃的都不收钱</p></div>
+    <div class="spec"><h4>随时可停</h4><p>关掉再开，从断点继续</p></div>
+    <div class="spec"><h4>角色不换脸</h4><p>确认后自动用在每个镜头</p></div>
+    <div class="spec"><h4>AI 生成标识</h4><p>导出自动加，符合平台要求</p></div>
+    <div class="spec"><h4>素材在本地</h4><p>按项目存放，可用剪映继续剪</p></div>
+  </div>
+</section>
+<section class="cta-band">
+  <div class="wrap reveal">
+    <h2 class="h2">先做一集试试</h2>
+    <p class="lead">第一集有免费额度，不需要注册任何平台账号，也不用先买任何东西。</p>
+    <div class="cta-row"><a class="btn btn-primary" href="#">免费开始做第一集</a><a class="btn btn-ghost" href="#">看看常见问题 ›</a></div>
+  </div>
+</section>
+<footer>
+  <div class="wrap">
+    <p>页面中的剧照为示例素材，用于说明产品能力；实际效果取决于所接模型、内容与配置。使用 AI 生成的短剧需要按平台与主管部门要求完成备案并标注 AI 生成标识，本产品不代替备案与审核流程。</p>
+    <p>© 2026 漫剧工场</p>
+  </div>
+</footer>
+<script>
+const io=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}})},{threshold:.12});
+document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+</script>
+</body>
+</html>
