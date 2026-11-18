@@ -215,6 +215,28 @@ img{display:block}
 .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--panel);color:var(--ink);padding:9px 16px;border-radius:8px;font-family:var(--mono);font-size:11px;display:none;z-index:70;box-shadow:0 0 18px var(--accent-soft)}
 .toast.show{display:block}
 .view{display:none}.view.on{display:block}
+/* ---------- 首页 ---------- */
+.home{height:calc(100vh - 46px);overflow-y:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 24px;text-align:center}
+.home-hero h1{font-size:28px;font-weight:700;letter-spacing:.01em}
+.home-hero p{margin-top:10px;color:var(--ink2);font-size:13px;max-width:520px}
+.home-box{margin-top:26px;width:min(640px,100%);background:var(--panel);border-radius:12px;box-shadow:0 24px 50px -24px rgba(0,0,0,.55);padding:14px 14px 12px;text-align:left}
+.home-box textarea{width:100%;border:none;background:transparent;resize:none;color:var(--ink);font-family:inherit;font-size:13.5px;line-height:1.6;outline:none}
+.home-box textarea::placeholder{color:var(--ink3)}
+.home-box-ft{display:flex;align-items:center;gap:8px;margin-top:12px}
+.home-box-ft .chips{display:flex;gap:6px;flex-wrap:wrap}
+.home-box-ft .btn-p{margin-left:auto}
+.home-recent{margin-top:46px;width:min(640px,100%);text-align:left}
+.home-sec{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--ink3);margin-bottom:10px}
+.proj{display:flex;gap:12px;align-items:center;background:var(--panel);border-radius:10px;padding:12px;cursor:pointer;box-shadow:0 18px 36px -22px rgba(0,0,0,.55);transition:box-shadow .25s}
+.proj:hover{box-shadow:0 26px 46px -20px rgba(0,0,0,.65)}
+.proj img{width:64px;height:40px;object-fit:cover;border-radius:6px}
+.proj .pi{flex:1;min-width:0}
+.proj .t{font-size:13px;font-weight:600}
+.proj .s{font-size:11px;color:var(--ink3);margin-top:3px}
+.pbar2{height:4px;background:var(--panel2);border-radius:2px;margin-top:8px;overflow:hidden}
+.pbar2 i{display:block;height:100%;background:var(--accent)}
+.home-note{margin-top:26px;font-size:11px;color:var(--ink3);max-width:560px}
+@media (max-width:1024px){.home{padding:28px 16px}}
 @media (max-width:1024px){.side{width:196px}.right{width:262px}.stream{padding:16px}}
 </style>
 </head>
@@ -228,9 +250,10 @@ img{display:block}
     </svg>
     <span class="nm">鲸鲨漫剧</span><span class="ver">LOCAL</span>
   </div>
-  <div class="crumb">项目 / <b>人的一生</b> · 第 1 集</div>
+  <div class="crumb" id="crumb">首页</div>
   <nav class="seg" aria-label="页面">
-    <button class="on" data-act="view" data-arg="work">制作</button>
+    <button class="on" data-act="view" data-arg="home">首页</button>
+    <button data-act="view" data-arg="work">制作</button>
     <button data-act="view" data-arg="settings">模型设置</button>
   </nav>
   <div class="topbar-r">
@@ -240,7 +263,39 @@ img{display:block}
     <div class="avatar">林</div>
   </div>
 </header>
-<main id="v-work" class="view on">
+<main id="v-home" class="view on">
+<div class="home">
+  <div class="home-hero">
+    <h1>今天，想做一部什么剧？</h1>
+    <p>一句话描述你的想法，助手带你从剧本走到成片。你只需要在三件事上确认：剧本、角色、前 30 秒。</p>
+  </div>
+  <div class="home-box">
+    <textarea id="idea" rows="2" placeholder="例如：讲一个普通人的一生，从八岁到七十岁，三集竖屏短剧" aria-label="描述你想做的剧"></textarea>
+    <div class="home-box-ft">
+      <div class="chips">
+        <button class="chip c-run" data-act="fillTpl" data-arg="life">普通人的一生</button>
+        <button class="chip" data-act="fillTpl" data-arg="city">都市逆袭</button>
+        <button class="chip" data-act="fillTpl" data-arg="mystery">悬疑反转</button>
+      </div>
+      <button class="btn btn-p" data-act="create">开始创作</button>
+    </div>
+  </div>
+  <div class="home-recent">
+    <div class="home-sec">继续上次</div>
+    <div class="proj" data-act="openProject" role="button" tabindex="0" aria-label="打开项目：人的一生">
+      <img src="{{HERO}}" alt="项目《人的一生》的示例剧照">
+      <div class="pi">
+        <div class="t">人的一生 · 3 集</div>
+        <div class="s">上次做到：第 4 步 · 确认角色形象</div>
+        <div class="pbar2"><i style="width:50%"></i></div>
+      </div>
+      <span class="chip c-run">4 / 8 步</span>
+    </div>
+  </div>
+  <p class="home-note">密钥和素材只存在你的电脑上，调用直接发给模型厂商。没有模型也能先用平台额度试做第一集。</p>
+</div>
+</main>
+<main id="v-work" class="view">
 <div class="bench">
   <aside class="side" id="side" aria-label="制作步骤"></aside>
   <section class="main" aria-label="工作区">
@@ -317,7 +372,7 @@ const SHOTS=[
  {i:12, t:"背影 · 定格", img:IMG.old, key:true, model:"可灵（你的密钥）", cost:16}
 ];
 const S={
-  step:3, view:"work", tab:"shots", locked:false,
+  step:3, view:"home", tab:"shots", locked:false,
   sel:new Set(["child","teen","adult","mid","old"]),
   gen:{done:0, running:false, timer:null},
   player:{pos:0, playing:false, timer:null},
@@ -550,8 +605,26 @@ function render(){ renderSide(); renderStream(); renderRight(); renderSettings()
 /* 交互 */
 function act(a,arg){
   if(a==="goto"){ S.step=Math.max(0,Math.min(7,Number(arg))); render(); return; }
-  if(a==="view"){ S.view=arg; $("#v-work").classList.toggle("on",arg==="work"); $("#v-settings").classList.toggle("on",arg==="settings");
-    document.querySelectorAll('.seg button').forEach(b=>b.classList.toggle("on",b.dataset.arg===arg)); return; }
+  if(a==="view"){ S.view=arg;
+    ["home","work","settings"].forEach(v=>{const el=$("#v-"+v); if(el) el.classList.toggle("on",arg===v);});
+    document.querySelectorAll('.seg button').forEach(b=>b.classList.toggle("on",b.dataset.arg===arg));
+    $("#crumb").innerHTML = arg==="home" ? "首页" : (arg==="settings" ? "设置" : '项目 / <b>人的一生</b> · 第 1 集');
+    return; }
+  if(a==="create"){ const v=$("#idea").value.trim();
+    if(!v){ toast("先写一句你的想法，或者点下面的题材模板"); $("#idea").focus(); return; }
+    S.view="work"; S.step=0; render(); $("#v-home").classList.remove("on"); $("#v-work").classList.add("on");
+    document.querySelectorAll('.seg button').forEach(b=>b.classList.toggle("on",b.dataset.arg==="work"));
+    $("#crumb").innerHTML='项目 / <b>人的一生</b> · 第 1 集';
+    toast("已按你的想法写第一稿大纲，看看第 1 步"); return; }
+  if(a==="openProject"){ S.view="work"; render();
+    $("#v-home").classList.remove("on"); $("#v-work").classList.add("on");
+    document.querySelectorAll('.seg button').forEach(b=>b.classList.toggle("on",b.dataset.arg==="work"));
+    $("#crumb").innerHTML='项目 / <b>人的一生</b> · 第 1 集';
+    toast("已打开「人的一生」，从上次的地方继续"); return; }
+  if(a==="fillTpl"){ const m={life:"讲一个普通人的一生，从八岁到七十岁，三集竖屏短剧",
+    city:"都市逆袭：被裁员的中年程序员靠 AI 重新翻身，三集",
+    mystery:"深夜便利店连续出现同一张脸，悬疑三集"};
+    $("#idea").value=m[arg]||""; $("#idea").focus(); return; }
   if(a==="tab"){ S.tab=arg; renderRight(); return; }
   if(a==="theme"){
     const h=document.documentElement, light=h.getAttribute("data-theme")==="light";

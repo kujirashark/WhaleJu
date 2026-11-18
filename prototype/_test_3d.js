@@ -16,9 +16,26 @@ const path = require('path');
     else await page.locator(`text=${txt}`).first().click({ timeout: 4000 });
     await page.waitForTimeout(250);
   };
+  console.log('=== 首页 ===');
+  console.log('默认视图:', await page.evaluate(() => document.querySelector('.view.on').id));
+  await page.fill('#idea', '');
+  await page.locator('.chip', { hasText: '都市逆袭' }).click();
+  const filled = await page.inputValue('#idea');
+  console.log('模板填充:', filled.slice(0, 12) + '…');
+  await page.locator('.chip', { hasText: '普通人的一生' }).click();
+  await page.getByRole('button', { name: '开始创作' }).click();
+  await page.waitForTimeout(250);
+  console.log('创建后视图:', await page.evaluate(() => document.querySelector('.view.on').id),
+    '| 步骤:', (await page.locator('.card-hd').first().innerText()).split('\n')[0]);
+  await page.locator('.seg button', { hasText: '首页' }).click();
+  await page.waitForTimeout(150);
+  await page.locator('.proj').click();
+  await page.waitForTimeout(150);
+  console.log('继续上次视图:', await page.evaluate(() => document.querySelector('.view.on').id),
+    '| crumb:', await page.locator('#crumb').innerText());
+  console.log('品牌:', await page.locator('.brand .nm').innerText());
   console.log('=== 制作台 ===');
   console.log('初始主题:', await page.evaluate(() => document.documentElement.getAttribute('data-theme')));
-  console.log('品牌:', await page.locator('.brand .nm').innerText());
   // 8 步逐一点击
   const titles = [];
   for (let i = 0; i < 8; i++) {
