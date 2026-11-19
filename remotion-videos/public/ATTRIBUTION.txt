@@ -1,0 +1,8 @@
+=== Music Attribution ===
+Source: ccMixter (https://ccmixter.org)
+"On The Moon (Trip Hop mix)" by disharmonic
+  Source: https://ccmixter.org/files/disharmonic/2958
+  License: Attribution 2.5 (http://creativecommons.org/licenses/by/2.5/)
+---
+All tracks sourced from ccMixter under Creative Commons licenses.
+请在实际发布视频的描述中保留上述署名。
