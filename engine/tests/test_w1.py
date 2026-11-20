@@ -473,3 +473,59 @@ def test_script_generate_with_provider_real_flow():
     # 有剧本后可拆分镜头
     r2 = client.post(f"/api/projects/{pid}/shots/generate", json={"shot_count": 12}, headers=HEADERS)
     assert r2.status_code in (200, 400)  # 取决于 provider 是否也支持分镜输出格式
+def test_configured_provider_retries_on_429(monkeypatch):
+    """厂商 429 限流必须自动退避重试，而不是一次失败就放弃。"""
+    from engine.app.adapters.configured_provider import ConfiguredProvider
+    calls = []
+    class FakeResp:
+        def __init__(self, status, body):
+            self.status_code = status
+            self._body = body
+            self.text = __import__("json").dumps(body)
+        def json(self):
+            return self._body
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def post(self, *a, **kw):
+            calls.append(1)
+            if len(calls) == 1:
+                return FakeResp(429, {"error": {"message": "rate limit"}})
+            return FakeResp(200, {"choices": [{"message": {"content": "ok"}}]})
+    import engine.app.adapters.configured_provider as cp_mod
+    monkeypatch.setattr(cp_mod.httpx, "Client", FakeClient)
+    monkeypatch.setattr(cp_mod.time, "sleep", lambda _s: None)  # 不等真实 7 秒
+    p = ConfiguredProvider("t", "proxy", ("text",), "https://x.invalid/v1", api_key="k", model="m")
+    status, data, err = p._post("/chat/completions", {"model": "m"})
+    assert status == 200, err
+    assert len(calls) == 2  # 第一次 429，第二次成功
+def test_configured_provider_no_retry_on_401(monkeypatch):
+    """非限流类 4xx（如密钥错误）必须立刻失败，不能浪费 7 秒重试。"""
+    from engine.app.adapters.configured_provider import ConfiguredProvider
+    import engine.app.adapters.configured_provider as cp_mod
+    calls = []
+    class FakeResp:
+        status_code = 401
+        text = "unauthorized"
+        def json(self):
+            return {}
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def post(self, *a, **kw):
+            calls.append(1)
+            return FakeResp()
+    monkeypatch.setattr(cp_mod.httpx, "Client", FakeClient)
+    monkeypatch.setattr(cp_mod.time, "sleep", lambda _s: None)
+    p = ConfiguredProvider("t", "proxy", ("text",), "https://x.invalid/v1", api_key="bad", model="m")
+    status, data, err = p._post("/chat/completions", {})
+    assert status == 401
+    assert len(calls) == 1

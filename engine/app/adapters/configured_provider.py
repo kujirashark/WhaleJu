@@ -44,16 +44,29 @@ class ConfiguredProvider:
         if self.api_key:
             h["Authorization"] = f"Bearer {self.api_key}"
         return h
+    # 限流/临时故障时重试：SenseNova 等免费额度常返回 429 tpm/rpm，
+    # 不重试会让用户每次生成都失败，误以为软件跑不通。
+    RETRY_STATUS = {408, 429, 500, 502, 503, 504}
+    RETRY_DELAY_S = (1.0, 2.0, 4.0)  # 三次退避，总计约 7 秒
     def _post(self, path: str, payload: dict) -> tuple[int, dict | None, str]:
-        """同步底层 POST（在 async 方法内用 asyncio.to_thread 调用，避免阻塞事件循环）。"""
-        try:
-            with httpx.Client(timeout=self.timeout) as c:
-                r = c.post(self.endpoint + path, headers=self._headers(), json=payload)
-            if r.status_code != 200:
-                return r.status_code, None, f"HTTP {r.status_code}: {r.text[:120]}"
-            return 200, r.json(), ""
-        except Exception as exc:  # noqa: BLE001
-            return 0, None, str(exc)[:160]
+        """同步底层 POST（在 async 方法内用 asyncio.to_thread 调用，避免阻塞事件循环）。
+        对限流/临时故障做指数退避重试，重试耗尽才如实返回失败。"""
+        import time as _time
+        last_status, last_err = 0, ""
+        for attempt in range(len(self.RETRY_DELAY_S) + 1):
+            try:
+                with httpx.Client(timeout=self.timeout) as c:
+                    r = c.post(self.endpoint + path, headers=self._headers(), json=payload)
+                if r.status_code == 200:
+                    return 200, r.json(), ""
+                last_status, last_err = r.status_code, f"HTTP {r.status_code}: {r.text[:120]}"
+                if r.status_code not in self.RETRY_STATUS:
+                    return last_status, None, last_err  # 4xx 非限流：立刻失败，不重试
+            except Exception as exc:  # noqa: BLE001
+                last_status, last_err = 0, str(exc)[:160]
+            if attempt < len(self.RETRY_DELAY_S):
+                _time.sleep(self.RETRY_DELAY_S[attempt])
+        return last_status, None, last_err
     async def probe(self) -> ProbeResult:
         """真实探测：GET {endpoint}/models，成功即视为可用。不返回任何 mock 结果。"""
         t0 = time.monotonic()

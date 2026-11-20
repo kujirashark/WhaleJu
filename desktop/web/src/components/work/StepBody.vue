@@ -73,6 +73,9 @@ async function doExport() {
           <template v-else>
             <p>还没有剧本。用你在设置里配置的文本模型，根据想法生成第一稿。</p>
             <div v-if="project.contentError" class="hint-warn">{{ project.contentError }}</div>
+            <div v-if="project.contentBusy" class="gen-busy">
+              <span class="busy-dot"></span> 正在调用你配置的文本模型生成剧本（首次可能要十几秒，限流时会自动重试）…
+            </div>
             <div class="acts">
               <button class="btn btn-p" :disabled="project.contentBusy" @click="doGenScript">{{ project.contentBusy ? '正在生成…' : '用我的模型生成剧本' }}</button>
               <button class="btn btn-s" @click="router.push('/settings')">去配置文本模型</button>
