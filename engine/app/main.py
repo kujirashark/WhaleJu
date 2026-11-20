@@ -36,6 +36,16 @@ CONTENT = ContentGenerator(DB, REGISTRY)
 def refresh_providers() -> list[str]:
     """从本机配置重建真实 Provider 注册表（无任何配置时为空）。"""
     return load_configured_providers(DB, REGISTRY)
+def ensure_providers(ability: str) -> bool:
+    """生成前自愈：注册表缺该能力时，从数据库重新加载已验证配置。
+    背景：Provider 注册表是内存态，只在 lifespan 启动时与保存/测试配置时刷新。
+    用户在设置页测通某个能力、或引擎进程比配置更旧时，当前进程内存里仍是旧的
+    （空）注册表，生成就会误报 E4001。这里在每次生成前按需重建，杜绝误报。
+    """
+    if REGISTRY.has_ability(ability):
+        return True
+    refresh_providers()
+    return REGISTRY.has_ability(ability)
 # 本地鉴权 Token：优先使用桌面壳通过 IPC 注入的随机令牌；
 # 独立运行时自动生成，重启轮换（防本机其他进程调用）。
 # 任何情况下都不通过公开接口下发——Tauri 侧由 start_engine 直接返回。
@@ -155,6 +165,7 @@ async def generate_script(pid: str, req: ScriptGenReq = ScriptGenReq()):
     p = DB.get("projects", pid)
     if not p:
         raise HTTPException(404, "项目不存在")
+    ensure_providers("text")
     try:
         return await CONTENT.generate_script(pid, p["idea_text"], req.version)
     except NoProviderError as exc:
@@ -167,6 +178,7 @@ async def generate_characters(pid: str, req: CharactersGenReq = CharactersGenReq
     p = DB.get("projects", pid)
     if not p:
         raise HTTPException(404, "项目不存在")
+    ensure_providers("image")
     try:
         chars = await CONTENT.generate_characters(pid, req.count)
         return {"items": chars}
@@ -182,6 +194,7 @@ async def generate_shots(pid: str, req: ShotsGenReq = ShotsGenReq()):
         raise HTTPException(404, "项目不存在")
     if not p.get("script_json"):
         raise HTTPException(409, {"code": "E4003", "message": "还没有剧本", "hint": "请先在第 1 步生成剧本"})
+    ensure_providers("text")
     try:
         return await CONTENT.generate_shots(pid, req.shot_count)
     except NoProviderError as exc:
@@ -392,6 +405,7 @@ async def generation_start(pid: str, req: GenStartReq = GenStartReq()):
     if not p:
         raise HTTPException(404, "项目不存在")
     # 前置校验：视频能力必须已配置并通过真实连接测试，否则拒绝生成（无 Mock 兜底）
+    ensure_providers("video")
     if not REGISTRY.has_ability("video"):
         raise HTTPException(400, {
             "code": "E4001", "message": "还没有配置可用的视频模型",
@@ -433,6 +447,7 @@ async def generation_progress(pid: str):
 @app.post("/api/generation/submit", dependencies=[Depends(auth)])
 async def generation_submit(req: GenReq):
     """单镜头真实生成（走已配置的 Provider；未配置则明确拒绝）。"""
+    ensure_providers("video")
     route = REGISTRY.route("video", req.importance)
     if not route:
         raise HTTPException(400, {

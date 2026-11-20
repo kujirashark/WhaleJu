@@ -131,6 +131,35 @@ def test_model_test_with_config_returns_verified(monkeypatch):
     cap = client.get("/api/capabilities", headers=HEADERS).json()
     assert cap["ready"]["text"] is True
     assert REGISTRY.has_ability("text") is True
+def test_generation_self_heals_stale_registry(monkeypatch):
+    """注册表内存态被清空但库里已有 verified 配置时，生成端点必须自愈，不能误报 E4001。"""
+    import engine.app.main as main_mod
+    from engine.app.adapters.base import ProbeResult
+    async def fake_probe(self):
+        return ProbeResult(ok=True, abilities=(self.meta.abilities[0],))
+    monkeypatch.setattr(main_mod.ConfiguredProvider, "probe", fake_probe)
+    client = TestClient(app)
+    client.put("/api/model-configs/text", json={
+        "source": "owned", "provider_kind": "openai_compat", "name": "stub",
+        "endpoint": "https://example.invalid/v1", "model": "stub-model",
+        "credential": "sk-test-1234567890",
+    }, headers=HEADERS)
+    assert client.post("/api/model-configs/text/test", headers=HEADERS).json()["ok"] is True
+    # 模拟"引擎进程比配置旧"：注册表被清空
+    REGISTRY.clear()
+    assert REGISTRY.has_ability("text") is False
+    # monkeypatch 文本生成，验证自愈后确实走到了业务调用
+    calls = []
+    async def fake_script(pid, idea, version=1):
+        calls.append(pid)
+        return {"title": "ok", "episodes": []}
+    monkeypatch.setattr(main_mod.CONTENT, "generate_script", fake_script)
+    pid = client.post("/api/projects", json={"idea": "注册表自愈测试项目三集竖屏短剧"},
+                      headers=HEADERS).json()["id"]
+    r = client.post(f"/api/projects/{pid}/script/generate", headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert calls == [pid]
+    assert REGISTRY.has_ability("text") is True
 def test_model_test_404_hints_missing_v1(monkeypatch):
     """404 时必须提示地址缺少 /v1，而不是让用户对着 NOT_FOUND 猜测。"""
     import engine.app.main as main_mod
