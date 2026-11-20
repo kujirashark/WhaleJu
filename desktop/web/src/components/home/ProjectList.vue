@@ -19,7 +19,7 @@ function open(p: any) {
   project.currentId = p.id
   project.step = 0
   if (p.status === 'DELIVER') router.push('/works')
-  else router.push('/p/current')
+  else router.push(`/p/${p.id}`)
 }
 const progress = (s: string) => {
   const order = ['DRAFT', 'CP1_PENDING', 'CHARACT', 'CP2_PENDING', 'PLANNED', 'RUNNING', 'CP3_PENDING', 'DELIVER']

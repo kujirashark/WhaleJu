@@ -65,7 +65,17 @@ class EngineClient {
         headers: { 'Content-Type': 'application/json', 'X-Local-Token': this.token },
         body: opts.body ? JSON.stringify(opts.body) : undefined,
       })
-      if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 140)}`)
+      if (!res.ok) {
+        // 把 FastAPI 的 {detail:{code,message,hint}} 变成人话，避免把原始 JSON 甩给用户
+        let detail = ''
+        try {
+          const j = await res.json()
+          const d = j?.detail
+          detail = (typeof d === 'string' ? d : (d?.message || j?.message || ''))
+          if (d?.hint) detail += ` · ${d.hint}`
+        } catch { /* 非 JSON 响应保留状态文本 */ }
+        throw new Error(detail || `${res.status} 引擎返回错误`)
+      }
       return (await res.json()) as T
     } catch (e) {
       this.error = String((e as Error).message || e)

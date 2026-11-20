@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, nextTick, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useProjectStore } from '@/stores/project'
 import { useUiStore } from '@/stores/ui'
@@ -7,12 +7,16 @@ const agent = useAgentStore()
 const project = useProjectStore()
 const ui = useUiStore()
 const msg = ref('')
+const logEl = ref<HTMLElement | null>(null)
+// 新消息到达后自动滚到底部，保证"发送后有反应"可见
+watch(() => agent.messages.length, () => {
+  nextTick(() => { if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight })
+})
 async function send() {
   const v = msg.value.trim()
   if (!v) { ui.toast('先说点什么，比如：第二集太快了'); return }
   msg.value = ''
-  const intent = await agent.send(v, project.currentId)
-  if (intent?.confirm) ui.toast('有一项改动需要你确认')
+  await agent.send(v, project.currentId)
 }
 async function confirm() {
   const text = await agent.confirm()
@@ -32,6 +36,13 @@ async function confirm() {
         <button class="btn btn-p" :disabled="agent.executing" @click="confirm">确认执行</button>
       </div>
     </div>
+    <!-- 对话历史：用户消息 + 助手回复（此前从未渲染，导致"发送后无任何反应"） -->
+    <div ref="logEl" class="chat-log">
+      <div v-for="(m, i) in agent.messages" :key="i" class="chat-msg" :class="m.role">
+        <span class="chat-who">{{ m.role === 'user' ? '你' : '助手' }}</span>
+        <span class="chat-text">{{ m.text }}</span>
+      </div>
+    </div>
     <!-- SSE 流式回显 -->
     <div v-if="agent.streaming" class="stream-line">{{ agent.streaming }}<span class="caret">▍</span></div>
     <div style="display:flex;gap:8px;padding:12px 24px">
@@ -41,6 +52,12 @@ async function confirm() {
   </div>
 </template>
 <style scoped>
+.chat-log{max-height:150px;overflow-y:auto;padding:8px 24px 0;display:flex;flex-direction:column;gap:6px}
+.chat-msg{display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.5}
+.chat-who{flex-shrink:0;color:var(--ink3);font-family:var(--mono);font-size:10px;padding-top:1px}
+.chat-msg.user .chat-who{color:var(--accent)}
+.chat-text{color:var(--ink2);word-break:break-word}
+.chat-msg.user .chat-text{color:var(--ink)}
 .intent-bar{margin:10px 24px 0;padding:10px 12px;background:var(--accent-soft);border-radius:6px;display:flex;align-items:center;justify-content:space-between;gap:12px}
 .ib-txt{font-size:12px;color:var(--ink);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .ib-acts{display:flex;gap:6px;flex-shrink:0}

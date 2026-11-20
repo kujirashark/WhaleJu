@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { engine } from '@/api/engine'
+import { useProjectStore } from './project'
+import { useUiStore } from './ui'
 /** 对话 Agent（设计 §6.5 / §5.3）：SSE 三事件 + 意图确认门。
  *  Never 层：未确认的写操作一律不执行；确认后由前端调对应业务接口。 */
 export interface ChatMessage { role: 'user' | 'agent'; text: string }
@@ -76,30 +78,62 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
   function cancel() { pendingIntent.value = null }
-  /** 用户确认后由前端调业务接口执行；未确认绝不调用。 */
+  /** 用户确认后由前端调真实业务接口执行；未确认绝不调用。
+   *  设计 §5.3：Agent 只产意图，写操作必须映射到业务接口，不能只回一个假 effects。 */
   async function confirm(): Promise<string> {
     const intent = pendingIntent.value
     if (!intent) return '没有待确认的操作'
+    const project = useProjectStore()
+    const ui = useUiStore()
     if (intent.cost_impact > 0) {
       const w = await engine.api<{ balance: number }>('/api/wallet')
       if (w && w.balance < intent.cost_impact) {
         pendingIntent.value = null
-        return `额度不足（需要约 ${intent.cost_impact.toFixed(0)}），请先充值`
+        const msg = `额度不足（需要约 ${intent.cost_impact.toFixed(0)}），请先充值`
+        messages.value.push({ role: 'agent', text: msg })
+        return msg
       }
     }
     executing.value = true
+    let msg = ''
     try {
-      const r = await engine.api('/api/agent/execute', {
-        method: 'POST',
-        body: { ...intent, confirmed: true },
-      })
-      const msg = r ? `${intent.op} 已执行` : `未能执行：本地引擎未响应，请确认应用已启动`
-      messages.value.push({ role: 'agent', text: msg })
-      pendingIntent.value = null
-      return msg
+      switch (intent.op) {
+        case 'regen_script': {
+          const r = await project.genScript(project.scriptVer + 1)
+          msg = r.ok ? '剧本已重新生成' : (r.error || '剧本生成失败')
+          break
+        }
+        case 'adjust_pacing': {
+          const r = await project.genShots(12)
+          msg = r.ok ? '已重新拆分镜头（节奏调整）' : (r.error || '镜头拆分失败')
+          break
+        }
+        case 'swap_role_image': {
+          const r = await project.genCharacters(5)
+          msg = r.ok ? '定妆图已重新生成' : (r.error || '定妆图生成失败')
+          break
+        }
+        case 'route_to_recharge':
+          ui.payOpen = true
+          msg = '已打开充值窗口'
+          break
+        case 'route_to_settings':
+          window.location.hash = '#/settings'
+          msg = '已打开设置'
+          break
+        default:
+          // 纯查询/闲聊类意图仍走引擎确认留痕，但不产生副作用
+          await engine.api('/api/agent/execute', {
+            method: 'POST', body: { ...intent, confirmed: true },
+          })
+          msg = `${intent.op} 已记录`
+      }
     } finally {
       executing.value = false
+      pendingIntent.value = null
     }
+    messages.value.push({ role: 'agent', text: msg })
+    return msg
   }
   return { messages, pendingIntent, streaming, executing, send, cancel, confirm }
 })
