@@ -139,6 +139,26 @@ def create_project(req: CreateProject):
 @app.get("/api/projects", dependencies=[Depends(auth)])
 def list_projects():
     return {"items": DB.list("SELECT * FROM projects WHERE deleted_at IS NULL ORDER BY updated_at DESC")}
+@app.get("/api/projects/trash/list", dependencies=[Depends(auth)])
+def list_trash():
+    return {"items": DB.list("SELECT * FROM projects WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC")}
+@app.delete("/api/projects/{pid}", dependencies=[Depends(auth)])
+def delete_project(pid: str):
+    """软删项目：列表不再显示，数据仍留在库里，可恢复（误删可救）。"""
+    p = DB.get("projects", pid)
+    if not p or p.get("deleted_at"):
+        raise HTTPException(404, "项目不存在或已被清理")
+    with DB.tx() as c:
+        c.execute("UPDATE projects SET deleted_at=? WHERE id=?", (utc_now(), pid))
+    return {"deleted": True, "id": pid}
+@app.post("/api/projects/{pid}/restore", dependencies=[Depends(auth)])
+def restore_project(pid: str):
+    p = DB.get("projects", pid)
+    if not p:
+        raise HTTPException(404, "项目不存在")
+    with DB.tx() as c:
+        c.execute("UPDATE projects SET deleted_at=NULL WHERE id=?", (pid,))
+    return {"restored": True, "id": pid}
 @app.get("/api/projects/{pid}", dependencies=[Depends(auth)])
 def get_project(pid: str):
     p = DB.get("projects", pid)

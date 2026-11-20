@@ -529,3 +529,17 @@ def test_configured_provider_no_retry_on_401(monkeypatch):
     status, data, err = p._post("/chat/completions", {})
     assert status == 401
     assert len(calls) == 1
+def test_project_soft_delete_and_restore():
+    """项目删除后不进列表、详情 404；恢复后重新出现。"""
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"idea": "删除恢复测试项目三集竖屏短剧"},
+                      headers=HEADERS).json()["id"]
+    assert any(p["id"] == pid for p in client.get("/api/projects", headers=HEADERS).json()["items"])
+    r = client.delete(f"/api/projects/{pid}", headers=HEADERS)
+    assert r.status_code == 200 and r.json()["deleted"] is True
+    assert not any(p["id"] == pid for p in client.get("/api/projects", headers=HEADERS).json()["items"])
+    assert client.get(f"/api/projects/{pid}", headers=HEADERS).status_code == 404
+    assert any(p["id"] == pid for p in client.get("/api/projects/trash/list", headers=HEADERS).json()["items"])
+    r = client.post(f"/api/projects/{pid}/restore", headers=HEADERS)
+    assert r.status_code == 200 and r.json()["restored"] is True
+    assert any(p["id"] == pid for p in client.get("/api/projects", headers=HEADERS).json()["items"])

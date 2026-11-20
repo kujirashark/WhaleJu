@@ -92,6 +92,24 @@ export const useProjectStore = defineStore('project', () => {
     const r = await engine.api<{ items: any[] }>('/api/projects')
     if (r?.items) projects.value = r.items
   }
+  /** 软删项目：从列表移除，误删可恢复。删的是当前项目时清空选中态。 */
+  async function remove(id: string): Promise<boolean> {
+    const r = await engine.api(`/api/projects/${id}`, { method: 'DELETE' })
+    if (!r) return false
+    if (currentId.value === id) currentId.value = null
+    await loadProjects()
+    return true
+  }
+  async function loadTrash() {
+    const r = await engine.api<{ items: any[] }>('/api/projects/trash/list')
+    return r?.items || []
+  }
+  async function restore(id: string): Promise<boolean> {
+    const r = await engine.api(`/api/projects/${id}/restore`, { method: 'POST' })
+    if (!r) return false
+    await loadProjects()
+    return true
+  }
   function toggleRole(k: string) {
     const s = new Set(selectedRoles.value)
     s.has(k) ? s.delete(k) : s.add(k)
@@ -131,7 +149,7 @@ export const useProjectStore = defineStore('project', () => {
   return {
     currentId, step, tab, scriptVer, selectedRoles, locked, ratio, player, exp, projects,
     detail, script, shots, characters, contentBusy, contentError,
-    goto, create, loadProjects, loadDetail, genScript, genShots, genCharacters, toggleRole,
+    goto, create, loadProjects, loadDetail, remove, loadTrash, restore, genScript, genShots, genCharacters, toggleRole,
     togglePlay, startExport, exportWork,
   }
 })

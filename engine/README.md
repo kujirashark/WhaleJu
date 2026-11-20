@@ -11,7 +11,7 @@ python -m venv .venv
 # 云网关（模拟，本地联调）
 .venv/Scripts/python.exe -m uvicorn gateway.app:app --host 127.0.0.1 --port 8080
 # 测试
-.venv/Scripts/python.exe -m pytest engine/tests -q   # 33 passed（临时数据目录，不影响真实数据）
+.venv/Scripts/python.exe -m pytest engine/tests -q   # 34 passed（临时数据目录，不影响真实数据）
 ```
 引擎启动后 `GET /api/local-token` 取本地鉴权 token，后续请求带 `X-Local-Token: <token>`。
 ## 已实现（对应设计章节）
