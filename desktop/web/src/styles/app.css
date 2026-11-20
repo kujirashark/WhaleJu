@@ -261,3 +261,23 @@ img{display:block}
 .um-it{display:block;width:100%;text-align:left;background:none;border:none;font-family:var(--font);font-size:12.5px;color:var(--ink2);padding:9px 14px;cursor:pointer;transition:background .12s}
 .um-it:hover{background:var(--accent-soft);color:var(--accent)}
 .um-ft{padding:8px 14px;font-size:10.5px;color:var(--ink3);border-top:1px solid var(--line);font-variant-numeric:tabular-nums}
+/* ── 模型设置：真实 API 配置表单 ───────────────────────── */
+.cfgbox{display:flex;flex-direction:column;gap:10px;margin-top:10px;padding:12px;background:var(--panel2);border-radius:8px}
+.cf{display:flex;flex-direction:column;gap:4px}
+.cf>span{font-size:11px;color:var(--ink2);font-weight:600}
+.cf>span em{font-style:normal;color:var(--accent);font-size:10px;margin-left:4px}
+.cf input{width:100%;background:var(--panel);border:1px solid var(--line2);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:12px;color:var(--ink);outline:none}
+.cf input:focus{border-color:var(--accent)}
+.cf small{font-size:10.5px;color:var(--ink3)}
+.cf-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:2px}
+.hint-warn{margin-top:10px;padding:9px 11px;background:rgba(255,181,71,.08);border-radius:6px;font-size:11.5px;color:var(--warn,#ffb547);line-height:1.5}
+.okline.bad{color:var(--danger,#ff5c6c)}
+/* ── 真实数据占位 ─────────────────────────────────────────── */
+.row-ph{width:34px;height:34px;flex-shrink:0;border-radius:6px;background:var(--panel2);display:grid;place-items:center;font-size:12px;color:var(--ink3);font-family:var(--mono)}
+.empty-mini{padding:14px 10px;font-size:11px;color:var(--ink3);line-height:1.6;text-align:center}
+.proj-ph{width:96px;height:64px;flex-shrink:0;border-radius:8px;background:var(--panel2);display:grid;place-items:center;font-size:22px;color:var(--ink3);font-weight:600}
+.proj-empty,.works-empty{padding:28px;text-align:center;background:var(--panel);border-radius:10px}
+.proj-empty .t,.works-empty .t{font-size:14px;font-weight:600;color:var(--ink)}
+.proj-empty .s,.works-empty .s{font-size:12px;color:var(--ink3);margin:6px 0 12px}
+.wshot-ph{width:100%;height:100%;display:grid;place-items:center;font-size:11px;color:var(--ink3)}
+.role-ph{width:100%;height:100%;display:grid;place-items:center;font-size:11px;color:var(--ink3);background:var(--panel2)}

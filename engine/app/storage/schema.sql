@@ -8,6 +8,9 @@ CREATE TABLE IF NOT EXISTS projects (
   template_id TEXT NOT NULL,         -- 流程模板标识；V1 固定 'life_3ep'（3集短剧），扩展题材时新增
   idea_text   TEXT NOT NULL,         -- 用户首页输入的原始一句话（不改写不清洗；审计与回归测试锚点）
   status      TEXT NOT NULL,         -- 状态机当前态：DRAFT/CP1_PENDING/CHARACT/CP2_PENDING/PLANNED/RUNNING/CP3_PENDING/DELIVER
+  script_json TEXT,                  -- 真实生成的剧本结构（title + episodes）；NULL=还没生成
+  shots_json  TEXT,                  -- 真实生成的分镜结构（shots）；NULL=还没生成
+  script_ver  INTEGER NOT NULL DEFAULT 0,  -- 剧本稿号；0=尚未生成过
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   deleted_at  TEXT                   -- 软删时间戳；NULL=正常。删除进回收站目录，7 天后清理任务物理删除
@@ -105,9 +108,11 @@ CREATE TABLE IF NOT EXISTS model_configs (
   source            TEXT NOT NULL,     -- proxy/owned/local
   provider_kind     TEXT NOT NULL,     -- openai_compat/kling/jimeng/helo/ollama/comfyui——决定实例化哪个 adapter
   name              TEXT NOT NULL,     -- 用户可读名
-  endpoint          TEXT,              -- 自建/本地模型地址；云端厂商为空用内置默认
+  endpoint          TEXT NOT NULL,     -- 模型服务地址（真实必填：云端厂商填官方地址，本地填 http://host:port/v1）
+  model             TEXT,              -- 模型标识（如 deepseek-chat / MiniMax-Text-01 / 本地模型名）
   credential_cipher BLOB,              -- 密钥密文(AES-256-GCM，主密钥在 OS 凭证库)；查询接口绝不返回
   abilities         TEXT NOT NULL,     -- JSON：probe 实测可用能力清单
+  verified          INTEGER NOT NULL DEFAULT 0,  -- 0=未通过真实连接测试（不可用于生成）；1=实测可用
   is_active         INTEGER NOT NULL DEFAULT 1,  -- 同槽仅一条激活
   created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))

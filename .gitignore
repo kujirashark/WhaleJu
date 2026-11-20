@@ -28,3 +28,5 @@ desktop/web/node_modules/
 desktop/web/dist/
 # test screenshots
 desktop/web/_*.png
+# nodemo test
+desktop/_test_nodemo.cjs

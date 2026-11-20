@@ -40,7 +40,7 @@ class EngineClient {
           info = { running: true, port: 7420, token: j.token, base_url: 'http://127.0.0.1:7420' }
         }
       } catch (e) {
-        this.error = '未检测到本地引擎（浏览器预览为演示模式）'
+        this.error = '未检测到本地引擎，请先启动鲸鲨漫剧桌面应用'
       }
     }
     if (info?.running && info.base_url && info.token) {

@@ -1,0 +1,136 @@
+"""真实内容生成：用已配置的 text Provider 生成剧本/大纲/镜头。
+去演示化要点：
+- 没有配置/验证 text 能力 → 明确抛 NoProviderError，不返回任何预置示例文本。
+- 调用真实 LLM，把结果结构化后存 projects 表，前端只读引擎事实。
+- LLM 返回不可解析时如实报错，不用硬编码剧本冒充生成结果。
+"""
+from __future__ import annotations
+import json
+import re
+from ..adapters.base import ImageGenRequest, TextGenRequest
+from ..adapters.registry import ProviderRegistry
+from ..storage.db import Database
+from ..storage.util import utc_now
+class NoProviderError(Exception):
+    def __init__(self, message: str, code: str = "E4001"):
+        super().__init__(message)
+        self.code = code
+class ContentGenerator:
+    def __init__(self, db: Database, registry: ProviderRegistry):
+        self.db = db
+        self.registry = registry
+    def _provider(self):
+        route = self.registry.route("text", "key")
+        if not route:
+            raise NoProviderError("还没有配置可用的文本模型，请先到「设置 → 写剧本」配置并测试连接")
+        provider = self.registry.get(route.provider_id)
+        if not provider:
+            raise NoProviderError("文本模型当前不可用，请重新测试连接")
+        return provider
+    async def _ask(self, prompt: str, system: str) -> str:
+        provider = self._provider()
+        import asyncio
+        tid = await provider.submit(TextGenRequest(prompt=prompt, system=system, max_tokens=2048))
+        result = await provider.poll(tid)
+        if not result.ok:
+            raise NoProviderError(f"文本模型生成失败：{result.fail_reason or '未知错误'}")
+        # ConfiguredProvider 把文本正文放在 provider_task_id 字段（避免落盘 asset）
+        content = result.provider_task_id or result.asset_ref or ""
+        if not content:
+            raise NoProviderError("文本模型没有返回内容")
+        return content
+    async def generate_script(self, project_id: str, idea: str, version: int = 1) -> dict:
+        system = (
+            "你是短剧编剧。只输出 JSON，不要输出其他文字。格式："
+            '{"title":"剧名","episodes":[{"idx":1,"title":"集标题","tags":["标签"],"script":"本集正文"}]}'
+            "。写 3 集，每集一个明确的人生阶段，正文 150-250 字，语言口语化。"
+        )
+        prompt = f"根据用户想法写一部 3 集竖屏短剧。用户想法：{idea}"
+        raw = await self._ask(prompt, system)
+        data = self._parse_json(raw)
+        payload = {
+            "title": str(data.get("title") or idea[:12]),
+            "episodes": data.get("episodes") or [],
+            "version": version,
+            "idea": idea,
+            "generated_at": utc_now(),
+        }
+        with self.db.tx() as c:
+            c.execute(
+                "UPDATE projects SET script_json=?, script_ver=? WHERE id=?",
+                (json.dumps(payload, ensure_ascii=False), version, project_id),
+            )
+        return payload
+    async def generate_shots(self, project_id: str, shot_count: int = 12) -> dict:
+        system = (
+            "你是分镜师。只输出 JSON，不要输出其他文字。格式："
+            '{"shots":[{"idx":1,"scene":"场景描述","importance":"key|transition"}]}'
+            f"。输出 {shot_count} 个镜头，其中一半 key、一半 transition，按剧情顺序。"
+        )
+        with self.db.read() as c:
+            row = c.execute("SELECT script_json, idea_text FROM projects WHERE id=?", (project_id,)).fetchone()
+        idea = (row["idea_text"] if row else "") or "短剧"
+        prompt = f"根据这部剧拆分镜头。剧情：{idea}"
+        raw = await self._ask(prompt, system)
+        data = self._parse_json(raw)
+        shots = data.get("shots") or []
+        payload = {"shots": shots, "generated_at": utc_now()}
+        with self.db.tx() as c:
+            c.execute("UPDATE projects SET shots_json=? WHERE id=?",
+                      (json.dumps(payload, ensure_ascii=False), project_id))
+        return payload
+    async def generate_characters(self, project_id: str, count: int = 5) -> list[dict]:
+        """用已配置的 image 模型生成定妆参考图；未配置则明确拒绝。
+        返回 [{id, name, desc_text, ref_url}]，并落 characters 表。"""
+        route = self.registry.route("image", "key")
+        if not route:
+            raise NoProviderError("还没有配置可用的图片模型，请先到「设置 → 生成图片」配置并测试连接")
+        provider = self.registry.get(route.provider_id)
+        if not provider:
+            raise NoProviderError("图片模型当前不可用，请重新测试连接")
+        with self.db.read() as c:
+            row = c.execute("SELECT idea_text, script_json FROM projects WHERE id=?", (project_id,)).fetchone()
+        idea = (row["idea_text"] if row else "") or "短剧"
+        result: list[dict] = []
+        for i in range(count):
+            desc = f"{idea} 中的主要人物，第 {i + 1} 个年龄段/角色，定妆参考图"
+            try:
+                import asyncio
+                tid = await provider.submit(ImageGenRequest(prompt=desc, size="1024x1536"))
+                gen = await provider.poll(tid)
+                if not gen.ok:
+                    raise NoProviderError(f"图片模型生成失败：{gen.fail_reason or '未知错误'}")
+                url = ""
+                # ConfiguredProvider 把图片 URL 暂存在实例；通过 asset_ref 或重新取
+                url = gen.asset_ref or ""
+                if not url and hasattr(provider, "_assets"):
+                    url = provider._assets.get(tid, "")
+                cid = f"chr_{project_id}_{i + 1}"
+                with self.db.tx() as c:
+                    c.execute(
+                        """INSERT OR REPLACE INTO characters(id,project_id,name,desc_text,ref_images,locked)
+                           VALUES(?,?,?,?,?,0)""",
+                        (cid, project_id, f"角色 {i + 1}", desc,
+                         json.dumps([{"url": url, "rank": 1}], ensure_ascii=False)),
+                    )
+                result.append({"id": cid, "name": f"角色 {i + 1}", "desc_text": desc, "ref_url": url})
+            except NoProviderError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise NoProviderError(f"生成第 {i + 1} 个角色失败：{str(exc)[:80]}")
+        return result
+    @staticmethod
+    def _parse_json(raw: str) -> dict:
+        """从模型输出中稳健提取 JSON（容忍 ```json 包裹与前后说明文字）。"""
+        text = raw.strip()
+        m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
+        if m:
+            text = m.group(1)
+        else:
+            first, last = text.find("{"), text.rfind("}")
+            if first >= 0 and last > first:
+                text = text[first:last + 1]
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise NoProviderError(f"文本模型返回的内容无法解析为剧本：{exc}")

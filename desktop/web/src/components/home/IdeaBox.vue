@@ -24,9 +24,7 @@ async function create() {
     router.push('/p/current')
     ui.toast('项目已保存到本机，开始写第一稿')
   } else {
-    ui.toast('未连接引擎，当前为演示模式；界面可继续体验流程')
-    project.goto(0)
-    router.push('/p/current')
+    ui.toast('未能创建项目：本地引擎未连接或未响应，请确认桌面应用已启动')
   }
 }
 defineExpose({ idea })

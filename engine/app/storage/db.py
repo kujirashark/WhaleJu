@@ -22,6 +22,20 @@ class Database:
         conn = self.connect()
         try:
             conn.executescript(SCHEMA.read_text(encoding="utf-8"))
+            # 轻量迁移：老库可能缺少去演示化新增的列
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(model_configs)").fetchall()}
+            if "model" not in cols:
+                conn.execute("ALTER TABLE model_configs ADD COLUMN model TEXT")
+            if "verified" not in cols:
+                conn.execute("ALTER TABLE model_configs ADD COLUMN verified INTEGER NOT NULL DEFAULT 0")
+            pcols = {r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()}
+            for col, ddl in (
+                ("script_json", "TEXT"),
+                ("shots_json", "TEXT"),
+                ("script_ver", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if col not in pcols:
+                    conn.execute(f"ALTER TABLE projects ADD COLUMN {col} {ddl}")
             conn.commit()
         finally:
             conn.close()

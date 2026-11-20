@@ -18,7 +18,11 @@ const navItems = [
   { path: '/works', label: '作品库' },
   { path: '/settings', label: '设置' },
 ]
-const crumb = computed(() => (route.name === 'work' ? '项目 / <b>人的一生</b> · 第 1 集' : ''))
+const crumb = computed(() => {
+  if (route.name !== 'work') return ''
+  const name = project.projects.find((p: any) => p.id === project.currentId)?.name
+  return name ? `项目 / <b>${name}</b>` : ''
+})
 function go(path: string) {
   ui.closeAll()
   router.push(path)
@@ -26,7 +30,7 @@ function go(path: string) {
 async function confirmPay() {
   const amount = await wallet.recharge()
   ui.payOpen = false
-  ui.toast(amount ? `额度已到账，本地账本已更新 +${Math.round(amount)}` : '支付未完成，当前为演示模式')
+  ui.toast(amount ? `额度已到账，本地账本已更新 +${Math.round(amount)}` : '支付未完成，本地引擎未响应')
 }
 function lockRoles() {
   project.locked = true
@@ -71,7 +75,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
         @click="go(n.path)">{{ n.label }}</button>
     </nav>
     <div class="topbar-r">
-      <div class="status"><i></i>{{ online ? '本地引擎已连接' : '演示模式' }}</div>
+      <div class="status"><i></i>{{ online ? '本地引擎已连接' : '引擎未连接' }}</div>
       <button class="balance" @click="ui.payOpen = true" aria-label="充值额度">额度 <b>{{ wallet.balance.toFixed(1) }}</b></button>
       <button class="icobtn" @click="ui.toggleTheme()" :aria-label="ui.theme === 'dark' ? '切换浅色模式' : '切换深色模式'" v-html="ui.theme === 'dark'
         ? '<svg width=\'15\' height=\'15\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'1.7\' stroke-linecap=\'round\'><circle cx=\'12\' cy=\'12\' r=\'4\'/><path d=\'M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19\'/></svg>'

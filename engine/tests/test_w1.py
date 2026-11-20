@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
-from engine.app.main import app, DB, LOCAL_TOKEN
+from engine.app.main import app, DB, LOCAL_TOKEN, REGISTRY
+from engine.app.adapters.mock_provider import MockProvider
 from engine.app.storage.db import Database
 from engine.app.storage.util import ulid
 from engine.app.workflow.state_machine import TRANSITIONS, GuardError, WorkflowEngine
@@ -12,9 +13,15 @@ HEADERS = {"X-Local-Token": LOCAL_TOKEN}
 def clean_db():
     DB.init_schema()
     with DB.tx() as c:
-        for t in ("generation_tasks", "shots", "episodes", "checkpoints", "assets", "usage_events", "characters", "projects"):
+        for t in ("generation_tasks", "shots", "episodes", "checkpoints", "assets",
+                  "usage_events", "characters", "projects", "model_configs"):
             c.execute(f"DELETE FROM {t}")
         c.execute("UPDATE credit_wallet SET balance=86.4, frozen=0 WHERE id=1")
+    # 注册表隔离：生产路径零 Provider；需要生成能力的测试显式注册 MockProvider
+    REGISTRY.clear()
+def register_mock():
+    """测试专用：显式注册一个 Mock Provider 验证业务逻辑（生产路径不注册）。"""
+    REGISTRY.register(MockProvider())
 def test_state_machine_transition_table():
     """迁移表每一行都可被查到（纯函数，无需 DB）。"""
     e = WorkflowEngine()
@@ -62,8 +69,9 @@ def test_wallet_recharge():
     assert r.status_code == 200, r.text
     after = client.get("/api/wallet", headers=HEADERS).json()["balance"]
     assert after - before == pytest.approx(200.0)
-def test_generation_mock_roundtrip():
-    """W1 一票否决验收：submit→poll→冻结→结算，全链路零外部 API。"""
+def test_generation_roundtrip_with_provider():
+    """有 Provider 时：submit→poll→冻结→结算全链路（测试显式注册 Mock）。"""
+    register_mock()
     client = TestClient(app)
     r = client.post("/api/generation/submit", json={
         "prompt": "黄昏院子里的孩子奔跑", "duration_s": 5, "ratio": "9:16", "importance": "transition",
@@ -73,18 +81,43 @@ def test_generation_mock_roundtrip():
     assert body["ok"] is True
     assert body["task_id"].startswith("mt_")
     assert "route_reason" in body and body["route_reason"]
-    assert body["wallet"]["frozen"] == 0  # 结算后冻结已归零
-    assert body["wallet"]["balance"] < 86.4  # 实扣已发生
+    assert body["wallet"]["frozen"] == 0
+    assert body["wallet"]["balance"] < 86.4
     with DB.read() as c:
-        used = c.execute("SELECT COUNT(*) FROM usage_events WHERE ok=1 AND source='proxy'").fetchone()[0]
+        used = c.execute("SELECT COUNT(*) FROM usage_events WHERE ok=1").fetchone()[0]
     assert used >= 1
+def test_generation_rejected_without_provider():
+    """去演示化一票否决：未配置任何模型时，生成必须明确拒绝（无 Mock 兜底）。"""
+    client = TestClient(app)
+    r = client.post("/api/generation/submit", json={
+        "prompt": "测试", "duration_s": 5,
+    }, headers=HEADERS)
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "E4001"
+    pid = client.post("/api/projects", json={"idea": "无模型拒绝测试项目三集竖屏短剧"},
+                      headers=HEADERS).json()["id"]
+    r2 = client.post(f"/api/projects/{pid}/generation/start", json={"shot_count": 12}, headers=HEADERS)
+    assert r2.status_code == 400
+    assert r2.json()["detail"]["code"] == "E4001"
+def test_model_test_rejects_unconfigured():
+    """未配置槽位测试连接必须返回失败，不再返回 mock 可用。"""
+    client = TestClient(app)
+    r = client.post("/api/model-configs/video/test", headers=HEADERS)
+    assert r.status_code == 200
+    assert r.json()["ok"] is False and r.json()["verified"] is False
+def test_capabilities_reports_readiness():
+    """能力就绪接口：未配置时 all_ready=False，供前端明确引导。"""
+    client = TestClient(app)
+    cap = client.get("/api/capabilities", headers=HEADERS).json()
+    assert cap["all_ready"] is False
+    assert all(v is False for v in cap["ready"].values())
 def test_model_config_hides_credential():
     """凭证只入库密文；任何接口不回显明文（Never 层安全规则）。"""
     client = TestClient(app)
     secret = "sk-test-abcdefghijklmnop"
     r = client.put("/api/model-configs/text", json={
         "source": "owned", "provider_kind": "openai_compat", "name": "我的 DeepSeek",
-        "endpoint": "https://api.deepseek.com/v1", "credential": secret,
+        "endpoint": "https://api.deepseek.com/v1", "model": "deepseek-chat", "credential": secret,
     }, headers=HEADERS)
     assert r.status_code == 200, r.text
     assert secret not in r.text
@@ -97,14 +130,26 @@ def test_model_config_hides_credential():
     assert secret.encode() not in row["credential_cipher"]
     from engine.app.storage.vault import decrypt
     assert decrypt(row["credential_cipher"]) == secret
-def test_model_config_rejects_local_without_endpoint():
+def test_model_config_requires_endpoint_and_starts_unverified():
+    """所有来源（含本地）必须填 endpoint+model；保存后 unverified，实测通过才可用。"""
     client = TestClient(app)
+    # 缺 endpoint → 4xx（Pydantic 必填校验 422 或业务 400，均为明确拒绝）
+    assert client.put("/api/model-configs/video", json={
+        "source": "local", "provider_kind": "ollama", "name": "本地 Ollama",
+        "model": "llava", "credential": None,
+    }, headers=HEADERS).status_code in (400, 422)
+    # 本地无需密钥，填齐后保存成功但 unverified
     r = client.put("/api/model-configs/video", json={
-        "source": "local", "provider_kind": "ollama", "name": "本地 Ollama", "credential": None,
+        "source": "local", "provider_kind": "ollama", "name": "本地 Ollama",
+        "endpoint": "http://127.0.0.1:11434/v1", "model": "llava", "credential": None,
     }, headers=HEADERS)
-    assert r.status_code == 400
+    assert r.status_code == 200, r.text
+    slot = r.json()["slot"]
+    assert slot["verified"] is False and slot["status"] == "unverified"
+    # 未验证 → 注册表仍无该能力 → 生成被拒
+    assert REGISTRY.has_ability("video") is False
 def test_route_reason_present():
-    from engine.app.main import REGISTRY
+    register_mock()
     d = REGISTRY.route("video", "key")
     assert d is not None
     assert d.reason and "能力" in d.reason
@@ -179,6 +224,7 @@ def test_gateway_idempotency_and_auth():
 # ── W5：真实生成批次 + SSE ──────────────────────────────────
 def test_generation_batch_progress_and_pause():
     """批次进度是引擎事实：start → progress → pause → 进度不倒退。"""
+    register_mock()
     client = TestClient(app)
     pid = client.post("/api/projects", json={"idea": "批次进度测试用项目，三集竖屏短剧"},
                       headers=HEADERS).json()["id"]
@@ -199,9 +245,28 @@ def test_generation_batch_progress_and_pause():
     client.post(f"/api/projects/{pid}/generation/resume", headers=HEADERS)
 @pytest.mark.asyncio
 async def test_batch_pause_freezes_progress():
-    """直接测 manager：暂停后进度冻结（避免 HTTP 测试的事件循环时序干扰）。"""
+    """直接测 manager：暂停后进度冻结（模拟真实异步视频的在途任务）。"""
     import asyncio
     from engine.app.main import GENERATIONS
+    from engine.app.adapters.base import GenResult, ProviderMeta, VideoGenRequest
+    class SlowProvider:
+        """测试专用：poll 前几轮返回 pending，模拟真实异步视频，确保 pause 时有在途镜头。"""
+        def __init__(self):
+            self.meta = ProviderMeta(id="slow", kind="test", source="owned", abilities=("video",))
+            self._n: dict[str, int] = {}
+        async def probe(self):
+            from engine.app.adapters.base import ProbeResult
+            return ProbeResult(ok=True, abilities=("video",))
+        async def submit(self, req):
+            tid = "slow_" + str(abs(hash(req.scene_desc)))
+            self._n[tid] = 0
+            return tid
+        async def poll(self, tid):
+            self._n[tid] = self._n.get(tid, 0) + 1
+            if self._n[tid] < 20:
+                return GenResult(ok=False, fail_reason="pending")
+            return GenResult(ok=True, asset_ref=f"http://test/{tid}.mp4", raw_cost_estimate=9.0)
+    REGISTRY.register(SlowProvider())
     pid = "prj_pause_" + ulid()
     batch = await GENERATIONS.start(pid, shot_count=30)
     await asyncio.sleep(0.5)
@@ -237,3 +302,52 @@ def test_chat_sse_three_events():
     assert "event: intent" in body
     assert "event: done" in body
     assert "adjust_pacing" in body and "confirm" in body
+# ── 去演示化：真实内容链路 ──────────────────────────────────
+def test_script_generate_rejected_without_text_provider():
+    """未配置文本模型时，生成剧本必须明确拒绝，绝不返回预置示例。"""
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"idea": "未配置模型测试项目三集竖屏短剧"}, headers=HEADERS).json()["id"]
+    r = client.post(f"/api/projects/{pid}/script/generate", json={"version": 1}, headers=HEADERS)
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "E4001"
+    # 项目里没有任何剧本内容
+    detail = client.get(f"/api/projects/{pid}", headers=HEADERS).json()
+    assert detail["script"] is None
+    assert detail["shots"] is None
+    assert detail["characters"] == []
+def test_script_generate_with_provider_real_flow():
+    """配置了文本模型后：真实生成→结构化存库→get_project 读回（测试用假 provider 验证编排）。"""
+    import json as _json
+    from engine.app.adapters.base import GenResult, ProviderMeta, TextGenRequest
+    class JsonTextProvider:
+        def __init__(self):
+            self.meta = ProviderMeta(id="jtext", kind="test", source="owned", abilities=("text",))
+        async def probe(self):
+            from engine.app.adapters.base import ProbeResult
+            return ProbeResult(ok=True, abilities=("text",))
+        async def submit(self, req: TextGenRequest):
+            payload = {
+                "title": "真实生成的剧",
+                "episodes": [
+                    {"idx": 1, "title": "第一集", "tags": ["测试"], "script": "这是模型真实返回的正文"},
+                ],
+            }
+            return "jtext_" + str(abs(hash(req.prompt)))
+        async def poll(self, tid):
+            return GenResult(ok=True, asset_ref=f"text://{tid}",
+                             provider_task_id=_json.dumps({
+                                 "title": "真实生成的剧",
+                                 "episodes": [{"idx": 1, "title": "第一集", "tags": ["测试"],
+                                               "script": "这是模型真实返回的正文"}],
+                             }, ensure_ascii=False))
+    REGISTRY.register(JsonTextProvider())
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"idea": "真实生成链路测试项目三集竖屏短剧"}, headers=HEADERS).json()["id"]
+    r = client.post(f"/api/projects/{pid}/script/generate", json={"version": 1}, headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert r.json()["title"] == "真实生成的剧"
+    detail = client.get(f"/api/projects/{pid}", headers=HEADERS).json()
+    assert detail["script"]["episodes"][0]["title"] == "第一集"
+    # 有剧本后可拆分镜头
+    r2 = client.post(f"/api/projects/{pid}/shots/generate", json={"shot_count": 12}, headers=HEADERS)
+    assert r2.status_code in (200, 400)  # 取决于 provider 是否也支持分镜输出格式

@@ -15,6 +15,6 @@ app.mount('#app')
 engine.init().then(async (ok) => {
   const ui = useUiStore()
   const wallet = useWalletStore()
-  ui.toast(ok ? '已连接本机引擎，项目和密钥都保存在这台电脑' : (engine.error || '本地引擎未启动，当前为演示模式'))
+  ui.toast(ok ? '已连接本机引擎，项目和密钥都保存在这台电脑' : (engine.error || '本地引擎未启动，请先打开桌面应用'))
   if (ok) await wallet.refresh()
 })

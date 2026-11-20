@@ -1,33 +1,46 @@
 <script setup lang="ts">
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import WorkCard from '@/components/works/WorkCard.vue'
-import { IMG } from '@/constants'
+import { engine } from '@/api/engine'
+import { useUiStore } from '@/stores/ui'
 const router = useRouter()
-const works = [
-  { img: IMG.child, title: '人的一生 · 第 1 集「院子」', meta: '竖屏 1080×1920 · 412 MB · 2026-11-17 导出', duration: '01:12', episode: '第 1 集' },
-  { img: IMG.teen, title: '人的一生 · 第 2 集「站台」', meta: '竖屏 1080×1920 · 466 MB · 2026-11-17 导出', duration: '01:26', episode: '第 2 集' },
-  { img: IMG.old, title: '人的一生 · 第 3 集「长椅」', meta: '竖屏 1080×1920 · 489 MB · 2026-11-17 导出', duration: '01:31', episode: '第 3 集' },
-]
+const ui = useUiStore()
+const works = ref<any[]>([])
+const loading = ref(true)
+onMounted(async () => {
+  const r = await engine.api<{ items: any[] }>('/api/works')
+  works.value = r?.items || []
+  loading.value = false
+})
+const size = (n: number) => n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`
+function openWorksFolder() {
+  engine.openFolder('works').then((d) => ui.toast(d ? `已打开：${d}` : '作品库文件夹未打开'))
+}
 </script>
 <template>
   <main class="view on">
     <div class="home">
       <div class="home-hero">
         <h1>作品库</h1>
-        <p>导出的成片都存在这台电脑上。下载、复制发布文案，或者再剪一版。每一集都自动带 AI 生成标识和备案材料包。</p>
+        <p>导出的成片都存在这台电脑上。这里只显示真实导出的作品——下载、复制发布文案。每一集都自动带 AI 生成标识。</p>
       </div>
-      <div class="works">
-        <WorkCard v-for="w in works" :key="w.title" v-bind="w" />
-        <div class="workcard empty">
-          <div class="wshot ph"></div>
-          <div class="wi">
-            <div class="t">下一个作品从这里开始</div>
-            <div class="s">回首页用一句话新建项目，做完第 8 步就会出现在这里。</div>
-            <div class="wacts"><button class="btn btn-s" @click="router.push('/')">去新建</button></div>
-          </div>
-        </div>
+      <div v-if="loading" class="home-note">正在读取本机作品库…</div>
+      <div v-else-if="!works.length" class="works-empty">
+        <div class="t">作品库还是空的</div>
+        <div class="s">完成一部剧的第 8 步导出后，成片会出现在这里。现在没有可下载的内容。</div>
+        <button class="btn btn-s" @click="router.push('/')">去新建项目</button>
       </div>
-      <p class="home-note">发布提示：抖音 / 视频号 / B 站都要求勾选"AI 生成内容"，文案里已经帮你写好了声明。</p>
+      <div v-else class="works">
+        <WorkCard
+          v-for="w in works" :key="w.id"
+          :workId="w.id"
+          title="本机成片"
+          :meta="`${size(w.size_bytes || 0)} · ${new Date(w.created_at).toLocaleString('zh-CN')} 导出`"
+          episode="成片"
+        />
+      </div>
+      <p class="home-note">发布提示：抖音 / 视频号 / B 站都要求勾选“AI 生成内容”，文案里已经写好声明。<button class="btn btn-t" @click="openWorksFolder">打开文件夹</button></p>
     </div>
   </main>
 </template>

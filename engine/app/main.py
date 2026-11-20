@@ -10,16 +10,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from .adapters.base import VideoGenRequest
-from .adapters.mock_provider import MockProvider
 from .adapters.registry import ProviderRegistry
+from .adapters.loader import load_configured_providers
 from .billing.ledger import CreditLedger, InsufficientCredits
 from .storage.db import Database
 from .storage.util import dumps, loads, ulid, utc_now
-from .storage.vault import encrypt, mask
-from .adapters.openai_compat import OpenAICompatProvider
+from .storage.vault import decrypt, encrypt, mask
+from .adapters.configured_provider import ConfiguredProvider
 from .workflow.state_machine import GuardError, WorkflowEngine
 from .workflow.checkpoints import CheckpointManager
 from .workflow.generation import GenerationManager
+from .workflow.content import ContentGenerator, NoProviderError
 from .agent.agent import ConversationAgent, Intent
 from .publish.kit import PublishKit
 DATA_DIR = Path(os.getenv("MANGJU_DATA_DIR", str(Path.cwd() / "engine" / "data")))
@@ -29,9 +30,12 @@ WORKFLOW = WorkflowEngine()
 CHECKPOINTS = CheckpointManager(DB)
 AGENT = ConversationAgent()
 REGISTRY = ProviderRegistry()
-REGISTRY.register(MockProvider())
 PUBLISH = PublishKit(DATA_DIR)
 GENERATIONS = GenerationManager(DB, LEDGER, REGISTRY)
+CONTENT = ContentGenerator(DB, REGISTRY)
+def refresh_providers() -> list[str]:
+    """从本机配置重建真实 Provider 注册表（无任何配置时为空）。"""
+    return load_configured_providers(DB, REGISTRY)
 # 本地鉴权 Token：优先使用桌面壳通过 IPC 注入的随机令牌；
 # 独立运行时自动生成，重启轮换（防本机其他进程调用）。
 # 任何情况下都不通过公开接口下发——Tauri 侧由 start_engine 直接返回。
@@ -39,6 +43,7 @@ LOCAL_TOKEN = os.getenv("MANGJU_LOCAL_TOKEN") or os.urandom(24).hex()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     DB.init_schema()
+    refresh_providers()
     recovered = CHECKPOINTS.recover()
     if recovered:
         print(f"[recover] {len(recovered)} 个检查点挂起，等待用户确认（不自动推进）")
@@ -75,11 +80,12 @@ class GenReq(BaseModel):
 class RechargeReq(BaseModel):
     plan_id: str = Field(pattern="^(p1|p2|p3)$")
 class SaveModelReq(BaseModel):
-    source: str = Field(pattern="^(proxy|owned|local)$")
-    provider_kind: str = Field(pattern="^(openai_compat|kling|jimeng|helo|ollama|comfyui)$")
+    source: str = Field(pattern="^(owned|local|proxy)$")
+    provider_kind: str = Field(default="openai_compat", pattern="^(openai_compat|kling|jimeng|helo|ollama|comfyui)$")
     name: str = Field(min_length=1, max_length=60)
-    endpoint: str | None = None
-    credential: str | None = None
+    endpoint: str = Field(min_length=8, max_length=500)   # 真实必填：所有来源都要有服务地址
+    model: str = Field(min_length=1, max_length=120)      # 真实必填：模型标识
+    credential: str | None = None                          # local 可为空；owned/proxy 需密钥
 PLANS = {"p1": 50.0, "p2": 200.0, "p3": 1000.0}
 SLOTS = ("text", "image", "video", "speech")
 def _public_slot(slot: str) -> dict:
@@ -88,11 +94,16 @@ def _public_slot(slot: str) -> dict:
             "SELECT * FROM model_configs WHERE slot=? AND is_active=1", (slot,)
         ).fetchone()
     if not row:
-        return {"source": None, "provider_kind": None, "name": None, "status": "unset", "last_probe_at": None}
+        return {
+            "source": None, "provider_kind": None, "name": None, "model": None,
+            "endpoint": None, "status": "unset", "verified": False, "last_probe_at": None,
+        }
+    verified = bool(row["verified"])
     return {
         "source": row["source"], "provider_kind": row["provider_kind"],
-        "name": row["name"], "status": "probed_ok", "last_probe_at": row["updated_at"],
-        "endpoint": row["endpoint"],
+        "name": row["name"], "model": row["model"], "endpoint": row["endpoint"],
+        "status": "verified" if verified else "unverified",
+        "verified": verified, "last_probe_at": row["updated_at"],
     }
 @app.get("/health")
 def health():
@@ -119,7 +130,62 @@ def get_project(pid: str):
     p = DB.get("projects", pid)
     if not p or p.get("deleted_at"):
         raise HTTPException(404, "项目不存在或已被清理")
-    return {**p, "resume_hint": f"当前状态：{p['status']}", "credits_frozen": LEDGER.wallet()["frozen"]}
+    script = loads(p.get("script_json"), None) if p.get("script_json") else None
+    shots = loads(p.get("shots_json"), None) if p.get("shots_json") else None
+    chars = DB.list(
+        "SELECT id,name,desc_text,ref_images,locked FROM characters WHERE project_id=? ORDER BY id",
+        (pid,),
+    )
+    for ch in chars:
+        refs = loads(ch.get("ref_images"), [])
+        ch["ref_url"] = refs[0].get("url") if refs else None
+    return {
+        **p,
+        "script": script,
+        "shots": shots,
+        "characters": chars,
+        "resume_hint": f"当前状态：{p['status']}",
+        "credits_frozen": LEDGER.wallet()["frozen"],
+    }
+class ScriptGenReq(BaseModel):
+    version: int = Field(default=1, ge=1, le=99)
+@app.post("/api/projects/{pid}/script/generate", dependencies=[Depends(auth)])
+async def generate_script(pid: str, req: ScriptGenReq = ScriptGenReq()):
+    """用已配置的文本模型真实生成剧本；未配置则明确拒绝。"""
+    p = DB.get("projects", pid)
+    if not p:
+        raise HTTPException(404, "项目不存在")
+    try:
+        return await CONTENT.generate_script(pid, p["idea_text"], req.version)
+    except NoProviderError as exc:
+        raise HTTPException(400, {"code": exc.code, "message": str(exc), "hint": "到设置里配置文本模型并测试连接"})
+class CharactersGenReq(BaseModel):
+    count: int = Field(default=5, ge=1, le=20)
+@app.post("/api/projects/{pid}/characters/generate", dependencies=[Depends(auth)])
+async def generate_characters(pid: str, req: CharactersGenReq = CharactersGenReq()):
+    """用已配置的图片模型真实生成定妆图；未配置则明确拒绝。"""
+    p = DB.get("projects", pid)
+    if not p:
+        raise HTTPException(404, "项目不存在")
+    try:
+        chars = await CONTENT.generate_characters(pid, req.count)
+        return {"items": chars}
+    except NoProviderError as exc:
+        raise HTTPException(400, {"code": exc.code, "message": str(exc), "hint": "到设置里配置图片模型并测试连接"})
+class ShotsGenReq(BaseModel):
+    shot_count: int = Field(default=12, ge=1, le=60)
+@app.post("/api/projects/{pid}/shots/generate", dependencies=[Depends(auth)])
+async def generate_shots(pid: str, req: ShotsGenReq = ShotsGenReq()):
+    """用已配置的文本模型真实拆分镜头；未配置剧本时先生成剧本。"""
+    p = DB.get("projects", pid)
+    if not p:
+        raise HTTPException(404, "项目不存在")
+    if not p.get("script_json"):
+        raise HTTPException(409, {"code": "E4003", "message": "还没有剧本", "hint": "请先在第 1 步生成剧本"})
+    try:
+        return await CONTENT.generate_shots(pid, req.shot_count)
+    except NoProviderError as exc:
+        raise HTTPException(400, {"code": exc.code, "message": str(exc), "hint": "到设置里配置文本模型并测试连接"})
 @app.post("/api/projects/{pid}/steps/{step}/advance", dependencies=[Depends(auth)])
 def advance(pid: str, step: int, req: AdvanceReq):
     p = DB.get("projects", pid)
@@ -197,14 +263,22 @@ async def export_project(pid: str, req: ExportReq):
     p = DB.get("projects", pid)
     if not p:
         raise HTTPException(404, "项目不存在")
-    # 生产环境：从 assets 表取该集所有 video 素材，ffmpeg concat。
-    # 当前视频槽仍为 Mock：无真实素材时生成明确标注的演示成片（demo=True），
-    # 避免 500 中断闭环，也绝不把演示片伪装成正式作品。
-    src = req.source_path or str(DATA_DIR / "assets" / "sample.mp4")
-    if Path(src).exists():
-        result = await PUBLISH.compose(src, ai_badge=True)  # 强制 true，忽略 req.ai_badge
-    else:
-        result = await PUBLISH.compose_demo(p["name"])
+    # 真实素材优先：取该项目已生成完成的 video 素材拼合成片。
+    # 无真实素材 → 明确拒绝（409），不再生成任何演示片。
+    src = req.source_path
+    if not src:
+        rows = DB.list(
+            "SELECT local_path FROM assets WHERE project_id=? AND kind='video' ORDER BY created_at",
+            (pid,),
+        )
+        real = [r["local_path"] for r in rows if Path(r["local_path"]).exists()]
+        src = real[0] if real else None
+    if not src or not Path(src).exists():
+        raise HTTPException(409, {
+            "code": "E4002", "message": "还没有真实画面可以导出",
+            "hint": "请先完成第 6 步生成真实画面。没有素材时不会生成演示片。",
+        })
+    result = await PUBLISH.compose(src, ai_badge=True)  # 强制 true，忽略 req.ai_badge
     DB.insert("assets", {
         "id": result["work_id"], "project_id": pid, "kind": "work",
         "local_path": result["local_path"], "sha256": "pending",
@@ -231,45 +305,74 @@ def model_configs():
     return {"slots": {s: _public_slot(s) for s in SLOTS}}
 @app.put("/api/model-configs/{slot}", dependencies=[Depends(auth)])
 def save_model_config(slot: str, req: SaveModelReq):
-    """凭证在此处加密入库，此后任何接口不回显明文。"""
+    """保存真实 API 配置。凭证加密入库，此后任何接口不回显明文。
+    保存后状态为 unverified——必须再点「测试连接」且真实探测通过，
+    该槽位才可用于生成。杜绝"填了假地址也能跑"的演示行为。
+    """
     if slot not in SLOTS:
         raise HTTPException(400, "未知能力槽")
-    if req.source == "local" and not req.endpoint:
-        raise HTTPException(400, "本地模型需要填写服务地址")
+    if req.source in ("owned", "proxy") and not req.credential:
+        raise HTTPException(400, "这个来源需要填写 API 密钥")
+    cipher = encrypt(req.credential) if req.credential else None
     with DB.tx() as c:
         c.execute("UPDATE model_configs SET is_active=0 WHERE slot=?", (slot,))
-        cipher = encrypt(req.credential) if req.credential else None
         c.execute(
-            """INSERT INTO model_configs(id,slot,source,provider_kind,name,endpoint,credential_cipher,abilities,is_active)
-               VALUES(?,?,?,?,?,?,?,?,1)""",
+            """INSERT INTO model_configs
+               (id,slot,source,provider_kind,name,endpoint,model,credential_cipher,abilities,verified,is_active)
+               VALUES(?,?,?,?,?,?,?,?,?,0,1)""",
             (ulid(), slot, req.source, req.provider_kind, req.name, req.endpoint,
-             cipher, dumps(list(SLOTS))),
+             req.model, cipher, dumps([slot])),
         )
+    refresh_providers()
     return {"saved": True, "slot": _public_slot(slot)}
 @app.post("/api/model-configs/{slot}/test", dependencies=[Depends(auth)])
 async def test_model_config(slot: str):
-    """连接测试：真实 Key 时走 probe；未配置时返回 mock 可用。"""
+    """真实连接测试：GET {endpoint}/models。通过才置 verified=1 并允许生成。
+    未配置 → 明确失败（引导用户先填地址），绝不返回 mock 可用。
+    """
     if slot not in SLOTS:
         raise HTTPException(400, "未知能力槽")
     with DB.read() as c:
         row = c.execute(
             "SELECT * FROM model_configs WHERE slot=? AND is_active=1", (slot,)
         ).fetchone()
-    if not row:
-        return {"ok": True, "latency_ms": 8, "abilities": ["text", "image", "video", "speech"],
-                "price_hint": "模拟模式", "mock": True}
-    if not row["credential_cipher"]:
-        return {"ok": True, "latency_ms": 5, "abilities": loads(row["abilities"], []),
-                "price_hint": "无需密钥", "mock": False}
-    from .storage.vault import decrypt
-    p = OpenAICompatProvider(
-        provider_id=f"owned_{slot}", endpoint=row["endpoint"] or "https://api.openai.com/v1",
-        api_key=decrypt(row["credential_cipher"]),
+    if not row or not row.get("endpoint"):
+        return {"ok": False, "verified": False, "error": "请先填写服务地址并保存", "mock": False}
+    key = ""
+    if row.get("credential_cipher"):
+        try:
+            key = decrypt(bytes(row["credential_cipher"]))
+        except Exception:  # noqa: BLE001
+            return {"ok": False, "verified": False, "error": "密钥无法解密，请重新填写", "mock": False}
+    provider = ConfiguredProvider(
+        provider_id=f"test_{slot}", source=row["source"], abilities=(slot,),
+        endpoint=row["endpoint"], api_key=key, model=row.get("model") or "",
+        provider_kind=row["provider_kind"], timeout=10.0,
     )
-    result = await p.probe()
-    return {"ok": result.ok, "latency_ms": result.latency_ms,
+    result = await provider.probe()
+    if result.ok:
+        with DB.tx() as c:
+            c.execute(
+                "UPDATE model_configs SET verified=1, abilities=? WHERE id=?",
+                (dumps(list(result.abilities) or [slot]), row["id"]),
+            )
+        refresh_providers()
+    else:
+        with DB.tx() as c:
+            c.execute("UPDATE model_configs SET verified=0 WHERE id=?", (row["id"],))
+        refresh_providers()
+    return {"ok": result.ok, "verified": result.ok, "latency_ms": result.latency_ms,
             "abilities": list(result.abilities), "price_hint": result.price_hint,
             "error": result.error, "mock": False}
+@app.get("/api/capabilities", dependencies=[Depends(auth)])
+def capabilities():
+    """各能力槽的就绪状态，供前端在生成前明确提示未配置项。"""
+    ready = {slot: _public_slot(slot)["verified"] for slot in SLOTS}
+    return {
+        "slots": {slot: _public_slot(slot) for slot in SLOTS},
+        "ready": ready,
+        "all_ready": all(ready.values()),
+    }
 class GenStartReq(BaseModel):
     shot_count: int = Field(default=12, ge=1, le=60)
 @app.post("/api/projects/{pid}/generation/start", dependencies=[Depends(auth)])
@@ -278,6 +381,12 @@ async def generation_start(pid: str, req: GenStartReq = GenStartReq()):
     p = DB.get("projects", pid)
     if not p:
         raise HTTPException(404, "项目不存在")
+    # 前置校验：视频能力必须已配置并通过真实连接测试，否则拒绝生成（无 Mock 兜底）
+    if not REGISTRY.has_ability("video"):
+        raise HTTPException(400, {
+            "code": "E4001", "message": "还没有配置可用的视频模型",
+            "hint": "请先到「设置 → 生成视频」填写服务地址和模型，并点「测试连接」通过后再开始",
+        })
     wallet = LEDGER.wallet()
     if wallet["balance"] < PRICE_PER_SHOT_ESTIMATE * req.shot_count:
         raise HTTPException(400, {
@@ -306,16 +415,20 @@ async def generation_progress(pid: str):
     """进度是引擎事实；前端只渲染，不做业务判断。"""
     r = GENERATIONS.progress(pid)
     if r is None:
-        return {"done": 0, "total": 12, "running": 0, "failed": 0,
-                "queued": 12, "paused": False, "eta_s": None,
-                "failed_items": [], "items": []}
+        # 尚未开始：这是一个真实的中性状态，不是伪装成"已排队 12 个"
+        return {"batch_id": None, "done": 0, "total": 0, "running": 0, "failed": 0,
+                "queued": 0, "paused": False, "eta_s": None,
+                "failed_items": [], "items": [], "not_started": True}
     return r
 @app.post("/api/generation/submit", dependencies=[Depends(auth)])
 async def generation_submit(req: GenReq):
-    """W1 冒烟：Mock 通道跑通 submit→poll→冻结→结算。"""
+    """单镜头真实生成（走已配置的 Provider；未配置则明确拒绝）。"""
     route = REGISTRY.route("video", req.importance)
     if not route:
-        raise HTTPException(400, "没有可用模型")
+        raise HTTPException(400, {
+            "code": "E4001", "message": "没有可用的视频模型",
+            "hint": "请先到设置里配置视频模型并测试连接通过",
+        })
     provider = REGISTRY.get(route.provider_id)
     freeze_id = LEDGER.freeze(req.duration_s * 0.9, "smoke", route.provider_id, "video")
     try:

@@ -65,11 +65,11 @@ export const useAgentStore = defineStore('agent', () => {
       streaming.value = ''
       return pendingIntent.value
     } catch {
-      // 降级：JSON 版 chat（无 SSE 时仍能拿到 intent）
+      // 降级：JSON 版 chat（SSE 不可用时仍能拿到意图；这不是演示，是真接口）
       const r = await engine.api<{ intent: Intent }>('/api/chat', {
         method: 'POST', body: { message: text, project_id: projectId },
       })
-      const reply = r?.intent?.confirm || '收到。助手会按这句话调整下一稿（演示模式）。'
+      const reply = r?.intent?.confirm || '本地引擎未连接，暂时无法处理，请确认桌面应用已启动。'
       messages.value.push({ role: 'agent', text: reply })
       pendingIntent.value = r?.intent || null
       return pendingIntent.value
@@ -93,7 +93,7 @@ export const useAgentStore = defineStore('agent', () => {
         method: 'POST',
         body: { ...intent, confirmed: true },
       })
-      const msg = r ? `${intent.op} 已执行` : `演示模式：${intent.op} 已记录（未写入引擎）`
+      const msg = r ? `${intent.op} 已执行` : `未能执行：本地引擎未响应，请确认应用已启动`
       messages.value.push({ role: 'agent', text: msg })
       pendingIntent.value = null
       return msg

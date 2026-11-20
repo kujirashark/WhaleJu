@@ -13,8 +13,14 @@ class ProviderRegistry:
         self._providers: dict[str, Provider] = {}
     def register(self, provider: Provider) -> None:
         self._providers[provider.meta.id] = provider
+    def unregister(self, provider_id: str) -> None:
+        self._providers.pop(provider_id, None)
+    def clear(self) -> None:
+        self._providers.clear()
     def get(self, provider_id: str) -> Provider | None:
         return self._providers.get(provider_id)
+    def has_ability(self, ability: str) -> bool:
+        return any(ability in p.meta.abilities for p in self._providers.values())
     def all_meta(self) -> list[ProviderMeta]:
         return [p.meta for p in self._providers.values()]
     def route(
