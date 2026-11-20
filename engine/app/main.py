@@ -311,10 +311,15 @@ def save_model_config(slot: str, req: SaveModelReq):
     """
     if slot not in SLOTS:
         raise HTTPException(400, "未知能力槽")
-    if req.source in ("owned", "proxy") and not req.credential:
-        raise HTTPException(400, "这个来源需要填写 API 密钥")
-    cipher = encrypt(req.credential) if req.credential else None
     with DB.tx() as c:
+        # 只改地址/模型、密钥留空时沿用原密文——否则用户改错地址后必须重填密钥才能保存。
+        prev = c.execute(
+            "SELECT source, credential_cipher FROM model_configs WHERE slot=? AND is_active=1", (slot,)
+        ).fetchone()
+        has_prev_key = bool(prev and prev["credential_cipher"])
+        if req.source in ("owned", "proxy") and not req.credential and not has_prev_key:
+            raise HTTPException(400, "这个来源需要填写 API 密钥")
+        cipher = encrypt(req.credential) if req.credential else (prev["credential_cipher"] if has_prev_key else None)
         c.execute("UPDATE model_configs SET is_active=0 WHERE slot=?", (slot,))
         c.execute(
             """INSERT INTO model_configs

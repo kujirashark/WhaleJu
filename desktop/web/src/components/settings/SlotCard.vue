@@ -44,7 +44,7 @@ const needKey = computed(() => choice.value !== 'local')
         </label>
         <label class="cf" v-if="needKey">
           <span>API 密钥</span>
-          <input v-model="draft.credential" type="password" placeholder="粘贴密钥，提交后不再显示" :aria-label="`${title} API 密钥`">
+          <input v-model="draft.credential" type="password" placeholder="留空则沿用已保存的密钥；首次配置请粘贴" :aria-label="`${title} API 密钥`">
         </label>
         <div class="cf-row">
           <button class="btn btn-s" :disabled="settings.probing[id]" @click="settings.saveOne(id); ui.toast('配置已保存到本机')">保存</button>

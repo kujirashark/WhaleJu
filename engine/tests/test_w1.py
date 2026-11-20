@@ -148,6 +148,29 @@ def test_model_test_404_hints_missing_v1(monkeypatch):
     assert r.status_code == 200, r.text
     assert r.json()["ok"] is False
     assert "/v1" in r.json()["error"]
+def test_save_config_reuses_credential_when_blank():
+    """只改地址/模型、密钥留空时沿用旧密文（改错地址不用重填密钥）。"""
+    client = TestClient(app)
+    base = {"source": "proxy", "provider_kind": "openai_compat", "name": "stub",
+            "model": "stub-model"}
+    r = client.put("/api/model-configs/text", json={
+        **base, "endpoint": "https://old.example/v1", "credential": "sk-reuse-1234567890",
+    }, headers=HEADERS)
+    assert r.status_code == 200, r.text
+    with DB.read() as c:
+        before = c.execute(
+            "SELECT credential_cipher FROM model_configs WHERE slot='text' AND is_active=1"
+        ).fetchone()["credential_cipher"]
+    r = client.put("/api/model-configs/text", json={
+        **base, "endpoint": "https://new.example/v1", "credential": None,
+    }, headers=HEADERS)
+    assert r.status_code == 200, r.text
+    with DB.read() as c:
+        after = c.execute(
+            "SELECT endpoint, credential_cipher FROM model_configs WHERE slot='text' AND is_active=1"
+        ).fetchone()
+    assert after["endpoint"] == "https://new.example/v1"
+    assert bytes(after["credential_cipher"]) == bytes(before)
 def test_capabilities_reports_readiness():
     """能力就绪接口：未配置时 all_ready=False，供前端明确引导。"""
     client = TestClient(app)
