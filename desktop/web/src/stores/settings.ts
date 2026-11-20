@@ -29,8 +29,14 @@ export const useSettingsStore = defineStore('settings', () => {
   const serverSlots = ref<Record<string, any>>({})
   const probeResults = ref<Record<string, string>>({})
   const probing = ref<Record<string, boolean>>({})
-  const SOURCE_KIND: Record<string, string> = { key: 'owned', local: 'local', plat: 'proxy' }
-  function pick(slot: string, value: string) { slots.value[slot] = value }
+  const SOURCE_KIND: Record<string, SlotDraft['source']> = { key: 'owned', local: 'local', plat: 'proxy' }
+  /** 界面选项(key/local/plat) → 引擎来源(owned/local/proxy)，必须同步进草稿，
+   * 否则选了「本地」仍按 owned 提交，会误报需要密钥。 */
+  function pick(slot: string, value: string) {
+    slots.value[slot] = value
+    const mapped = SOURCE_KIND[value]
+    if (mapped) drafts.value[slot].source = mapped
+  }
   /** 从引擎加载已保存配置（服务端是唯一事实源）。 */
   async function load() {
     const r = await engine.api<{ slots: Record<string, any> }>('/api/model-configs')
@@ -42,6 +48,8 @@ export const useSettingsStore = defineStore('settings', () => {
         if (s === 'owned') slots.value[slot] = 'key'
         else if (s === 'local') slots.value[slot] = 'local'
         else if (s === 'proxy') slots.value[slot] = 'plat'
+        // 回写草稿来源：刷新页面后再次保存不能把已有 local/proxy 配置覆盖成默认 owned
+        if (s === 'owned' || s === 'local' || s === 'proxy') drafts.value[slot].source = s
       }
     }
   }

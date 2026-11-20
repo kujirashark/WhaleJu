@@ -1,5 +1,6 @@
 # 鲸鲨漫剧 本地引擎（W1-W4 实现）
 基于 `docs/鲸鲨漫剧-系统设计方案-合订本-v3.1.md` 的增量实现。当前完成 **W1-W4 后端与网关骨架**，桌面 UI 沿用 `prototype/鲸鲨漫剧-制作台-v2.0.html`。
+> **先看这里**：本文记录 W1–W4 的历史实现，其中 Mock、桌面壳未搭建等描述已过时。当前启动、模型配置与调试请以 **`docs/鲸鲨漫剧-启动与调试手册.md`** 为准。生产路径已去演示化：所有能力由用户配置的真实 API 提供，未配置或测试未通过会明确拒绝。
 ## 运行
 ```bash
 # 依赖（已安装则跳过）
@@ -10,7 +11,7 @@ python -m venv .venv
 # 云网关（模拟，本地联调）
 .venv/Scripts/python.exe -m uvicorn gateway.app:app --host 127.0.0.1 --port 8080
 # 测试
-.venv/Scripts/python.exe -m pytest engine/tests/test_w1.py -q   # 17 passed
+.venv/Scripts/python.exe -m pytest engine/tests -q   # 26 passed
 ```
 引擎启动后 `GET /api/local-token` 取本地鉴权 token，后续请求带 `X-Local-Token: <token>`。
 ## 已实现（对应设计章节）
@@ -42,10 +43,10 @@ gateway/app.py               # 网关骨架（内存模拟，生产换 Redis + L
 - 导出强制带 AI 标识（API 层 + compose 层双重强制）
 - 网关提示词只留哈希、幂等键防重复扣费
 ## 已知限制（未实现，按设计文档后续迭代）
-1. **适配器只有文本槽接了真实 OpenAI 兼容 API**；视频槽（可灵 BYOM / 海螺代采）目前用 Mock——无 Key 也能验收全链路，真实视频 API 待接（W2 扩展）
+1. **通用适配器按 OpenAI 兼容协议覆盖四类能力（文本/图片/视频/语音）**，视频走 submit→poll 两段式；不兼容的厂商（可灵原生协议等）需新增薄适配器。生产路径零 Mock，详见启动与调试手册 §6.4
 2. **网关用内存态模拟**，生产需替换为 Redis + Lua 原子扣减（设计 §6.6）
 3. **ffmpeg 在本机 WinGet shim 下无法直接 subprocess**，测试环境降级为文件复制；生产打包必须内置真实 ffmpeg
-4. **桌面壳（Tauri+Vue3）尚未搭建**；UI 用现有 HTML 原型
+4. **桌面壳已搭建**（`desktop/`：Tauri v2 + Vue 3），但打包未做代码签名与自动更新；界面构建与启动步骤见启动与调试手册 §2–§3
 5. **对话改写用规则兜底**（无 LLM Key 时），生产接 LLM 单次调用产出同结构 Intent
 6. 支付回调、对账 cron、资产 sha256 落地、SSE 流式输出未实现
 ## 环境变量
