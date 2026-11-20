@@ -20,3 +20,6 @@ prototype/_3d_*.png
 prototype/_w_*.png
 prototype/_shot*.png
 prototype/_mmd*
+# Tauri build artifacts
+desktop/src-tauri/target/
+desktop/src-tauri/gen/schemas/

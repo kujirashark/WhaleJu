@@ -1,0 +1,13 @@
+{
+  "name": "whale-studio-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "鲸鲨漫剧桌面工作台（Tauri v2 壳 + 本地 FastAPI 引擎）",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0"
+  }
+}

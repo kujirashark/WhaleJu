@@ -4,6 +4,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Header
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from .adapters.base import VideoGenRequest
 from .adapters.mock_provider import MockProvider
@@ -26,8 +27,10 @@ AGENT = ConversationAgent()
 REGISTRY = ProviderRegistry()
 REGISTRY.register(MockProvider())
 PUBLISH = PublishKit(DATA_DIR)
-# 本地鉴权 Token：启动时生成，重启轮换（防本机其他进程调用）
-LOCAL_TOKEN = os.urandom(24).hex()
+# 本地鉴权 Token：优先使用桌面壳通过 IPC 注入的随机令牌；
+# 独立运行时自动生成，重启轮换（防本机其他进程调用）。
+# 任何情况下都不通过公开接口下发——Tauri 侧由 start_engine 直接返回。
+LOCAL_TOKEN = os.getenv("MANGJU_LOCAL_TOKEN") or os.urandom(24).hex()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     DB.init_schema()
@@ -36,6 +39,17 @@ async def lifespan(app: FastAPI):
         print(f"[recover] {len(recovered)} 个检查点挂起，等待用户确认（不自动推进）")
     yield
 app = FastAPI(title="鲸鲨漫剧本地引擎", version="v1-w1", lifespan=lifespan)
+# 桌面壳 WebView 的 Origin（仅这三类来源 + 本机绑定 + Token 鉴权，不开放公网）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://tauri.localhost",   # Tauri v2 Windows 正式来源
+        "tauri://localhost",        # Tauri v2 macOS / Linux
+    ],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",  # 本地开发预览
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["X-Local-Token", "Content-Type"],
+)
 def auth(x_local_token: str | None = Header(default=None)):
     if x_local_token != LOCAL_TOKEN:
         raise HTTPException(401, "本地引擎鉴权失败")
@@ -159,9 +173,14 @@ async def export_project(pid: str, req: ExportReq):
     p = DB.get("projects", pid)
     if not p:
         raise HTTPException(404, "项目不存在")
-    # 生产环境：从 assets 表取该集所有 video 素材，ffmpeg concat；W4 用占位素材或传入源
+    # 生产环境：从 assets 表取该集所有 video 素材，ffmpeg concat。
+    # 当前视频槽仍为 Mock：无真实素材时生成明确标注的演示成片（demo=True），
+    # 避免 500 中断闭环，也绝不把演示片伪装成正式作品。
     src = req.source_path or str(DATA_DIR / "assets" / "sample.mp4")
-    result = await PUBLISH.compose(src, ai_badge=True)  # 强制 true，忽略 req.ai_badge
+    if Path(src).exists():
+        result = await PUBLISH.compose(src, ai_badge=True)  # 强制 true，忽略 req.ai_badge
+    else:
+        result = await PUBLISH.compose_demo(p["name"])
     DB.insert("assets", {
         "id": result["work_id"], "project_id": pid, "kind": "work",
         "local_path": result["local_path"], "sha256": "pending",
