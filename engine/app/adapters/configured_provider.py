@@ -67,6 +67,63 @@ class ConfiguredProvider:
             if attempt < len(self.RETRY_DELAY_S):
                 _time.sleep(self.RETRY_DELAY_S[attempt])
         return last_status, None, last_err
+    async def stream_chat(
+        self,
+        prompt: str,
+        system: str = "",
+        max_tokens: int = 2048,
+        temperature: float = 0.7,
+    ):
+        """OpenAI 兼容流式对话：逐块 yield 文本增量。
+        厂商返回 `data: {"choices":[{"delta":{"content":"..."}}]}` 的 SSE 行，
+        以 `data: [DONE]` 结束。任何失败都通过 RuntimeError 抛出，交由上层
+        如实反馈，绝不伪造 token。
+        """
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system or "你是短剧编剧，输出简洁的中文剧本。"},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        import json as _json
+        for attempt in range(len(self.RETRY_DELAY_S) + 1):
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as c:
+                    async with c.stream("POST", self.endpoint + "/chat/completions",
+                                        headers=self._headers(), json=payload) as r:
+                        if r.status_code != 200:
+                            body = (await r.aread()).decode("utf-8", "replace")[:160]
+                            if r.status_code in self.RETRY_STATUS and attempt < len(self.RETRY_DELAY_S):
+                                import asyncio as _aio
+                                await _aio.sleep(self.RETRY_DELAY_S[attempt])
+                                continue
+                            raise RuntimeError(f"HTTP {r.status_code}: {body}")
+                        async for line in r.aiter_lines():
+                            if not line.startswith("data:"):
+                                continue
+                            data = line[5:].strip()
+                            if data == "[DONE]":
+                                return
+                            try:
+                                obj = _json.loads(data)
+                                delta = obj["choices"][0].get("delta", {}).get("content")
+                            except (ValueError, KeyError, IndexError, TypeError):
+                                continue
+                            if delta:
+                                yield delta
+                        return
+            except RuntimeError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                if attempt < len(self.RETRY_DELAY_S):
+                    import asyncio as _aio
+                    await _aio.sleep(self.RETRY_DELAY_S[attempt])
+                    continue
+                raise RuntimeError(f"流式连接失败：{str(exc)[:120]}") from exc
     async def probe(self) -> ProbeResult:
         """真实探测：GET {endpoint}/models，成功即视为可用。不返回任何 mock 结果。"""
         t0 = time.monotonic()

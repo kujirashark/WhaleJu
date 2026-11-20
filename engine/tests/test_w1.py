@@ -558,3 +558,33 @@ def test_agent_classifies_flow_commands():
     }
     for text, expected in cases.items():
         assert a.classify(text) == expected, f"{text} 应识别为 {expected}"
+def test_script_stream_emits_tokens_and_saves(monkeypatch):
+    """流式生成必须逐块推 token，最后落库并推 done。"""
+    import engine.app.main as main_mod
+    class StreamProvider:
+        def __init__(self):
+            self.meta = __import__("engine.app.adapters.base", fromlist=["ProviderMeta"]).ProviderMeta(
+                id="stream", kind="test", source="owned", abilities=("text",))
+        async def probe(self):
+            from engine.app.adapters.base import ProbeResult
+            return ProbeResult(ok=True, abilities=("text",))
+        async def submit(self, req):
+            return "unused"
+        async def poll(self, tid):
+            from engine.app.adapters.base import GenResult
+            return GenResult(ok=False)
+        async def stream_chat(self, prompt, system="", max_tokens=2048, temperature=0.7):
+            for part in ['{"title":"流式剧","episodes":[', '{"idx":1,"title":"第一集","tags":[],"script":"正文"}]}']:
+                yield part
+    REGISTRY.clear()
+    REGISTRY.register(StreamProvider())
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"idea": "流式生成测试项目三集竖屏短剧"},
+                      headers=HEADERS).json()["id"]
+    with client.stream("POST", f"/api/projects/{pid}/script/generate/stream", headers=HEADERS) as r:
+        assert r.status_code == 200, r.text
+        body = r.read().decode()
+    assert "event: token" in body
+    assert "event: done" in body
+    detail = client.get(f"/api/projects/{pid}", headers=HEADERS).json()
+    assert detail["script"]["title"] == "流式剧"

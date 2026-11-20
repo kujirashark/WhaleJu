@@ -21,6 +21,54 @@ export const useProjectStore = defineStore('project', () => {
   const characters = ref<any[]>([])
   const contentBusy = ref(false)
   const contentError = ref('')
+  const streamText = ref('')  // 生成过程实时文本（流式 token 累积）
+  /** 流式生成剧本：读取 SSE 逐块更新 streamText，完成后落库结果写入 script。 */
+  async function genScriptStream(version = 1): Promise<{ ok: boolean; error?: string }> {
+    if (!currentId.value) return { ok: false, error: '没有当前项目' }
+    contentBusy.value = true
+    contentError.value = ''
+    streamText.value = ''
+    try {
+      const res = await fetch(`${engine.base}/api/projects/${currentId.value}/script/generate/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Local-Token': engine.token },
+        body: JSON.stringify({ version }),
+      })
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const blocks = buf.split('\n\n')
+        buf = blocks.pop() || ''
+        for (const block of blocks) {
+          const ev = block.split('\n').find(l => l.startsWith('event:'))?.slice(6).trim()
+          const raw = block.split('\n').find(l => l.startsWith('data:'))?.slice(5).trim()
+          if (!ev || !raw) continue
+          try {
+            const data = JSON.parse(raw)
+            if (ev === 'stage') { /* 阶段提示由 gen-busy 展示 */ }
+            else if (ev === 'token') streamText.value += data.t || ''
+            else if (ev === 'done') { script.value = data; streamText.value = ''; return { ok: true } }
+            else if (ev === 'error') {
+              contentError.value = `${data.message || '生成失败'}${data.hint ? ' · ' + data.hint : ''}`
+            }
+          } catch { /* 忽略无法解析的块 */ }
+        }
+      }
+      if (contentError.value) return { ok: false, error: contentError.value }
+      if (!script.value) { contentError.value = '生成结束但没有返回剧本'; return { ok: false, error: contentError.value } }
+      return { ok: true }
+    } catch (e) {
+      contentError.value = `生成失败：${(e as Error).message || '本地引擎未响应'}`
+      return { ok: false, error: contentError.value }
+    } finally {
+      contentBusy.value = false
+    }
+  }
   let playTimer: ReturnType<typeof setInterval> | undefined
   let expTimer: ReturnType<typeof setInterval> | undefined
   function goto(i: number) { step.value = Math.max(0, Math.min(7, Number(i))) }
@@ -148,8 +196,8 @@ export const useProjectStore = defineStore('project', () => {
   }
   return {
     currentId, step, tab, scriptVer, selectedRoles, locked, ratio, player, exp, projects,
-    detail, script, shots, characters, contentBusy, contentError,
-    goto, create, loadProjects, loadDetail, remove, loadTrash, restore, genScript, genShots, genCharacters, toggleRole,
+    detail, script, shots, characters, contentBusy, contentError, streamText,
+    goto, create, loadProjects, loadDetail, remove, loadTrash, restore, genScript, genScriptStream, genShots, genCharacters, toggleRole,
     togglePlay, startExport, exportWork,
   }
 })

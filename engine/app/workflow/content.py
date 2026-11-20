@@ -39,14 +39,15 @@ class ContentGenerator:
         if not content:
             raise NoProviderError("文本模型没有返回内容")
         return content
-    async def generate_script(self, project_id: str, idea: str, version: int = 1) -> dict:
+    @staticmethod
+    def _script_prompt(idea: str) -> tuple[str, str]:
         system = (
             "你是短剧编剧。只输出 JSON，不要输出其他文字。格式："
             '{"title":"剧名","episodes":[{"idx":1,"title":"集标题","tags":["标签"],"script":"本集正文"}]}'
             "。写 3 集，每集一个明确的人生阶段，正文 150-250 字，语言口语化。"
         )
-        prompt = f"根据用户想法写一部 3 集竖屏短剧。用户想法：{idea}"
-        raw = await self._ask(prompt, system)
+        return system, f"根据用户想法写一部 3 集竖屏短剧。用户想法：{idea}"
+    def _save_script(self, project_id: str, idea: str, version: int, raw: str) -> dict:
         data = self._parse_json(raw)
         payload = {
             "title": str(data.get("title") or idea[:12]),
@@ -61,6 +62,30 @@ class ContentGenerator:
                 (json.dumps(payload, ensure_ascii=False), version, project_id),
             )
         return payload
+    async def generate_script(self, project_id: str, idea: str, version: int = 1) -> dict:
+        system, prompt = self._script_prompt(idea)
+        raw = await self._ask(prompt, system)
+        return self._save_script(project_id, idea, version, raw)
+    async def stream_script(self, project_id: str, idea: str, version: int = 1):
+        """流式生成剧本：逐块 yield 文本增量，完整结果落库后 yield 终帧。
+        yield 格式：("token", 文本片段) / ("done", payload)
+        失败抛出 NoProviderError，由 API 层转成明确的 SSE error 事件。
+        """
+        provider = self._provider()
+        if not hasattr(provider, "stream_chat"):
+            raise NoProviderError("当前模型不支持流式输出，请改用支持 OpenAI 兼容流的模型")
+        system, prompt = self._script_prompt(idea)
+        chunks: list[str] = []
+        try:
+            async for delta in provider.stream_chat(prompt, system, max_tokens=2048):
+                chunks.append(delta)
+                yield ("token", delta)
+        except Exception as exc:  # noqa: BLE001
+            raise NoProviderError(f"文本模型生成失败：{str(exc)[:160]}") from exc
+        raw = "".join(chunks)
+        if not raw.strip():
+            raise NoProviderError("文本模型没有返回内容")
+        yield ("done", self._save_script(project_id, idea, version, raw))
     async def generate_shots(self, project_id: str, shot_count: int = 12) -> dict:
         system = (
             "你是分镜师。只输出 JSON，不要输出其他文字。格式："

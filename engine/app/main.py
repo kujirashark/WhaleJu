@@ -198,6 +198,35 @@ async def generate_script(pid: str, req: ScriptGenReq = ScriptGenReq()):
         message = "厂商额度或频率限制，暂时无法生成" if is_quota else raw
         hint = "等额度恢复或升级套餐；这不是模型配置问题" if is_quota else "到设置里配置文本模型并测试连接"
         raise HTTPException(400, {"code": exc.code, "message": message, "hint": hint})
+@app.post("/api/projects/{pid}/script/generate/stream", dependencies=[Depends(auth)])
+async def generate_script_stream(pid: str, req: ScriptGenReq = ScriptGenReq()):
+    """流式生成剧本：SSE 推 token / done / error 三类事件。
+    模型调用情况逐块可见；done 事件携带落库后的完整剧本；失败如实推 error。
+    与对话 SSE 一致，token 由 fetch 读取（header 带令牌，不走 query）。
+    """
+    p = DB.get("projects", pid)
+    if not p:
+        raise HTTPException(404, "项目不存在")
+    ensure_providers("text")
+    async def events():
+        yield "event: stage\ndata: " + json.dumps({"text": "已连接文本模型，正在生成剧本（若厂商限流会自动重试，请稍候）…"}, ensure_ascii=False) + "\n\n"
+        try:
+            async for kind, value in CONTENT.stream_script(pid, p["idea_text"], req.version):
+                if kind == "token":
+                    yield "event: token\ndata: " + json.dumps({"t": value}, ensure_ascii=False) + "\n\n"
+                else:
+                    yield "event: done\ndata: " + json.dumps(value, ensure_ascii=False) + "\n\n"
+        except NoProviderError as exc:
+            raw = str(exc)
+            is_quota = "quota" in raw.lower() or "429" in raw or "rate" in raw.lower()
+            err = {
+                "code": exc.code,
+                "message": "厂商额度或频率限制，暂时无法生成" if is_quota else raw,
+                "hint": "等额度恢复或升级套餐；这不是模型配置问题" if is_quota else "到设置里检查文本模型",
+            }
+            yield "event: error\ndata: " + json.dumps(err, ensure_ascii=False) + "\n\n"
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 class CharactersGenReq(BaseModel):
     count: int = Field(default=5, ge=1, le=20)
 @app.post("/api/projects/{pid}/characters/generate", dependencies=[Depends(auth)])

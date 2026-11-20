@@ -17,7 +17,8 @@ const firstAsset = computed(() => gen.items.find((i: any) => i.status === 'done'
 function window_open(url: string) { window.open(url, '_blank', 'noopener,noreferrer') }
 onMounted(() => project.loadDetail())
 async function doGenScript() {
-  const r = await project.genScript(project.scriptVer + 1)
+  const version = project.script ? project.scriptVer + 1 : 1
+  const r = await project.genScriptStream(version)
   if (r.ok) ui.toast('剧本已由你配置的模型生成并保存到本机')
   else ui.toast(r.error || '生成失败，请检查文本模型配置')
 }
@@ -74,8 +75,9 @@ async function doExport() {
             <p>还没有剧本。用你在设置里配置的文本模型，根据想法生成第一稿。</p>
             <div v-if="project.contentError" class="hint-warn">{{ project.contentError }}</div>
             <div v-if="project.contentBusy" class="gen-busy">
-              <span class="busy-dot"></span> 正在调用你配置的文本模型生成剧本（首次可能要十几秒，限流时会自动重试）…
+              <span class="busy-dot"></span> 正在调用你配置的文本模型生成剧本…
             </div>
+            <div v-if="project.streamText" class="stream-text">{{ project.streamText }}<span class="caret">▍</span></div>
             <div class="acts">
               <button class="btn btn-p" :disabled="project.contentBusy" @click="doGenScript">{{ project.contentBusy ? '正在生成…' : '用我的模型生成剧本' }}</button>
               <button class="btn btn-s" @click="router.push('/settings')">去配置文本模型</button>

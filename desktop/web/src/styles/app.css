@@ -275,6 +275,7 @@ img{display:block}
 .gen-busy{margin-top:10px;padding:9px 11px;background:var(--accent-soft);border-radius:6px;font-size:11.5px;color:var(--ink2);line-height:1.5;display:flex;align-items:center;gap:8px}
 .busy-dot{width:7px;height:7px;flex-shrink:0;border-radius:50%;background:var(--accent);animation:busy-pulse 1s ease-in-out infinite}
 @keyframes busy-pulse{50%{opacity:.25}}
+.stream-text{margin-top:8px;padding:11px 12px;background:var(--panel);border-radius:6px;font-size:11.5px;color:var(--ink2);line-height:1.7;max-height:180px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--mono)}
 /* ── 真实数据占位 ─────────────────────────────────────────── */
 .row-ph{width:34px;height:34px;flex-shrink:0;border-radius:6px;background:var(--panel2);display:grid;place-items:center;font-size:12px;color:var(--ink3);font-family:var(--mono)}
 .empty-mini{padding:14px 10px;font-size:11px;color:var(--ink3);line-height:1.6;text-align:center}
