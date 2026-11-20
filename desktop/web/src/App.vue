@@ -1,0 +1,121 @@
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useUiStore } from '@/stores/ui'
+import { useWalletStore } from '@/stores/wallet'
+import { useProjectStore } from '@/stores/project'
+import { engine } from '@/api/engine'
+const route = useRoute()
+const router = useRouter()
+const ui = useUiStore()
+const wallet = useWalletStore()
+const project = useProjectStore()
+const payPlan = computed(() => wallet.plan)
+const online = ref(false)
+const navItems = [
+  { path: '/', label: '首页' },
+  { path: '/p/current', label: '制作' },
+  { path: '/works', label: '作品库' },
+  { path: '/settings', label: '设置' },
+]
+const crumb = computed(() => (route.name === 'work' ? '项目 / <b>人的一生</b> · 第 1 集' : ''))
+function go(path: string) {
+  ui.closeAll()
+  router.push(path)
+}
+async function confirmPay() {
+  const amount = await wallet.recharge()
+  ui.payOpen = false
+  ui.toast(amount ? `额度已到账，本地账本已更新 +${Math.round(amount)}` : '支付未完成，当前为演示模式')
+}
+function lockRoles() {
+  project.locked = true
+  project.goto(4)
+  ui.lockOpen = false
+  ui.toast(`${project.selectedRoles.size} 个形象已确认，正在拆分镜头`)
+}
+async function openFolder(kind: 'data' | 'works') {
+  ui.userMenuOpen = false
+  const dir = await engine.openFolder(kind)
+  ui.toast(dir ? `已打开：${dir}` : (kind === 'data' ? '数据文件夹：文档 / 鲸鲨漫剧' : '成片保存在本机作品库文件夹'))
+}
+function onKey(e: KeyboardEvent) {
+  if (e.key === 'Escape') ui.closeAll()
+}
+onMounted(async () => {
+  ui.applyTheme()
+  await engine.init()
+  online.value = engine.online
+  window.addEventListener('keydown', onKey)
+  document.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement
+    if (ui.userMenuOpen && !t.closest('.usermenu') && !t.closest('.avatar')) ui.userMenuOpen = false
+  })
+})
+onUnmounted(() => window.removeEventListener('keydown', onKey))
+</script>
+<template>
+  <h1 class="sr-only">鲸鲨漫剧制作台：人的一生，八步从剧本到导出</h1>
+  <header class="topbar">
+    <div class="brand" @click="go('/')" role="button" tabindex="0">
+      <svg class="logo" width="27" height="23" viewBox="0 0 48 40" fill="none" aria-hidden="true">
+        <path d="M9 27C11 16.5 17 7.5 26 5c3.4-.9 6 .8 6 4.4V27Z" fill="currentColor" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+        <path d="M4 33.5q4-3.5 8.5 0t8.5 0t8.5 0t8.5 0t6.5 0" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+      </svg>
+      <span class="nm">鲸鲨漫剧</span><span class="ver">LOCAL</span>
+    </div>
+    <div class="crumb" v-html="crumb"></div>
+    <nav class="seg" aria-label="页面">
+      <button v-for="n in navItems" :key="n.path"
+        :class="{ on: n.path === '/' ? route.name === 'home' : n.path === '/p/current' ? route.name === 'work' : route.name === (n.path === '/works' ? 'works' : 'settings') }"
+        @click="go(n.path)">{{ n.label }}</button>
+    </nav>
+    <div class="topbar-r">
+      <div class="status"><i></i>{{ online ? '本地引擎已连接' : '演示模式' }}</div>
+      <button class="balance" @click="ui.payOpen = true" aria-label="充值额度">额度 <b>{{ wallet.balance.toFixed(1) }}</b></button>
+      <button class="icobtn" @click="ui.toggleTheme()" :aria-label="ui.theme === 'dark' ? '切换浅色模式' : '切换深色模式'" v-html="ui.theme === 'dark'
+        ? '<svg width=\'15\' height=\'15\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'1.7\' stroke-linecap=\'round\'><circle cx=\'12\' cy=\'12\' r=\'4\'/><path d=\'M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19\'/></svg>'
+        : '<svg width=\'15\' height=\'15\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'1.7\' stroke-linecap=\'round\' stroke-linejoin=\'round\'><path d=\'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z\'/></svg>'"></button>
+      <button class="avatar" @click="ui.userMenuOpen = !ui.userMenuOpen" aria-label="账户菜单" aria-haspopup="true">林</button>
+      <div class="usermenu" :class="{ open: ui.userMenuOpen }" role="menu">
+        <div class="um-hd">林 · 本地账户</div>
+        <button class="um-it" role="menuitem" @click="ui.userMenuOpen = false; ui.toast('本地账户，无云端资料；作品和密钥都在这台电脑上')">个人资料</button>
+        <button class="um-it" role="menuitem" @click="ui.userMenuOpen = false; ui.payOpen = true">我的额度 · 充值</button>
+        <button class="um-it" role="menuitem" @click="openFolder('data')">打开本地数据文件夹</button>
+        <button class="um-it" role="menuitem" @click="openFolder('works')">打开作品库文件夹</button>
+        <button class="um-it" role="menuitem" @click="ui.userMenuOpen = false; ui.toast('缓存已清除，项目和密钥不受影响')">清除本机缓存</button>
+        <div class="um-ft">鲸鲨漫剧 v1.0 · LOCAL</div>
+      </div>
+    </div>
+  </header>
+  <router-view />
+  <!-- 充值弹窗 -->
+  <div class="ov" :class="{ open: ui.payOpen }" role="dialog" aria-modal="true" aria-label="充值额度">
+    <div class="modal">
+      <div class="modal-h">充值额度</div>
+      <div class="modal-b">额度用来生成画面和视频。平台额度不用注册模型账号；如果你有自己的密钥，生成不消耗额度。</div>
+      <div class="plans">
+        <button v-for="p in [{ id: 'p1', t: '试用包', v: '¥49 · 50 额度', d: '够做 1 集，先试试' }, { id: 'p2', t: '创作月包', v: '¥99 · 200 额度', d: '3 集 × 2 轮返工' }, { id: 'p3', t: '年度包', v: '¥299 · 1000 额度', d: '长期创作最划算' }]" :key="p.id"
+          class="plan" :class="{ sel: payPlan === p.id }" @click="wallet.plan = p.id">
+          <span class="pt">{{ p.t }}</span><span class="pv">{{ p.v }}</span><span class="pd">{{ p.d }}</span>
+        </button>
+      </div>
+      <div class="modal-f">
+        <button class="btn btn-s" @click="ui.payOpen = false">先不用</button>
+        <button class="btn btn-p" @click="confirmPay">确认支付</button>
+      </div>
+    </div>
+  </div>
+  <!-- CP 检查点弹窗（确认角色形象） -->
+  <div class="ov" :class="{ open: ui.lockOpen }" role="dialog" aria-modal="true">
+    <div class="modal">
+      <div class="modal-h">确认角色形象？</div>
+      <div class="modal-b">确认后，这 <b>5 个年龄</b>的形象会固定下来，用在 <b>12 个镜头</b>里。<br>以后想换，需要把已经做好的镜头重新生成一遍。</div>
+      <div class="modal-f">
+        <button class="btn btn-s" @click="ui.lockOpen = false">再看看</button>
+        <button class="btn btn-p" @click="lockRoles">确认形象，继续</button>
+      </div>
+    </div>
+  </div>
+  <div class="toast" :class="{ show: !!ui.toastMsg }">{{ ui.toastMsg }}</div>
+</template>

@@ -23,3 +23,8 @@ prototype/_mmd*
 # Tauri build artifacts
 desktop/src-tauri/target/
 desktop/src-tauri/gen/schemas/
+# Vue frontend source artifacts
+desktop/web/node_modules/
+desktop/web/dist/
+# test screenshots
+desktop/web/_*.png
