@@ -58,6 +58,11 @@ export const useSettingsStore = defineStore('settings', () => {
           // 密钥不回显明文；用占位掩码提示"已保存"，用户留空即沿用
           drafts.value[slot].credential = ''
         }
+        // 自愈：服务端已验证但界面还残留"请点测试连接"的旧提示时纠正，
+        // 否则「已验证可用」和红色提示会同时出现，误导用户
+        if (i.verified && (probeResults.value[slot] || '').includes('请点「测试连接」')) {
+          probeResults.value[slot] = '这个能力已验证可用，可以开始生成'
+        }
       }
     }
   }
@@ -71,6 +76,13 @@ export const useSettingsStore = defineStore('settings', () => {
     if (!endpoint || !model) {
       probeResults.value[slot] = '请先填写服务地址和模型标识'
       return false
+    }
+    // 已验证且配置完全没变、也没输入新密钥时，无需再写库——直接保留现状。
+    // 这样旧引擎进程也不会因「密钥留空」误报 400，用户重开设置页点保存不会有假失败。
+    const server = serverSlots.value[slot]
+    if (server?.verified && !d.credential && server.endpoint === endpoint && server.model === model) {
+      probeResults.value[slot] = '配置未改动，这个能力仍处于已验证可用状态'
+      return true
     }
     const r = await engine.api(`/api/model-configs/${slot}`, {
       method: 'PUT',
@@ -90,6 +102,9 @@ export const useSettingsStore = defineStore('settings', () => {
       probeResults.value[slot] = verified
         ? '已保存，这个能力仍处于已验证可用状态'
         : '已保存，请点「测试连接」验证'
+    } else {
+      // 保存失败必须覆盖旧提示，否则界面上会同时出现「已验证」和旧的红色提示，自相矛盾
+      probeResults.value[slot] = `保存失败：${engine.error || '本地引擎未响应'}`
     }
     return !!r
   }
