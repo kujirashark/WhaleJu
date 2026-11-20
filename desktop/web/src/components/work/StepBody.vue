@@ -14,6 +14,19 @@ const done = computed(() => gen.done)
 const script = computed(() => project.script)
 const shots = computed(() => project.shots)
 const firstAsset = computed(() => gen.items.find((i: any) => i.status === 'done' && i.asset_ref)?.asset_ref || null)
+/** 第 1 步单一状态：任何时刻只呈现一种状态的信息，避免空态/忙碌/失败文案同屏打架。 */
+const scriptState = computed<'empty' | 'busy' | 'error' | 'done'>(() => {
+  if (script.value?.episodes?.length) return 'done'
+  if (project.contentBusy) return 'busy'
+  if (project.contentError) return 'error'
+  return 'empty'
+})
+const scriptPill = computed(() => ({
+  done: { text: `第 ${script.value?.version || 1} 稿`, cls: 'p-ok' },
+  busy: { text: '生成中', cls: 'p-info' },
+  error: { text: '生成失败', cls: 'p-err' },
+  empty: { text: '待生成', cls: 'p-off' },
+}[scriptState.value]))
 function window_open(url: string) { window.open(url, '_blank', 'noopener,noreferrer') }
 onMounted(() => project.loadDetail())
 async function doGenScript() {
@@ -53,37 +66,52 @@ async function doExport() {
       <svg width="16" height="13" viewBox="0 0 48 40" fill="none" aria-hidden="true"><path d="M9 27C11 16.5 17 7.5 26 5c3.4-.9 6 .8 6 4.4V27Z" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M4 33.5q4-3.5 8.5 0t8.5 0t8.5 0t8.5 0t6.5 0" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
     </div>
     <div class="card">
-      <!-- 第 1 步 -->
+      <!-- 第 1 步：四种状态互斥，一次只说一件事 -->
       <template v-if="step === 0">
-        <div class="card-hd">第 1 步 · 写剧本<span class="pill p-info">{{ script ? `第 ${script.version || 1} 稿` : '还没生成' }}</span></div>
-        <div class="card-bd">
-          <template v-if="script?.episodes?.length">
-            <p>由你配置的文本模型生成，共 {{ script.episodes.length }} 集，已保存到本机。</p>
-            <div class="script" style="margin-top:14px">
-              <template v-for="(ep, i) in script.episodes" :key="i">
-                <p><b>第 {{ ep.idx || i + 1 }} 集 · {{ ep.title }}</b></p>
-                <p>{{ ep.script }}</p>
-              </template>
+        <div class="card-hd">第 1 步 · 写剧本<span class="pill" :class="scriptPill.cls">{{ scriptPill.text }}</span></div>
+        <!-- 生成中：显示阶段 + 实时输出，不给无关操作 -->
+        <div v-if="scriptState === 'busy'" class="card-bd">
+          <div class="gen-live">
+            <span class="busy-dot"></span>
+            <div>
+              <div class="gen-live-t">正在写第一稿</div>
+              <div class="gen-live-s">已连接你配置的文本模型，内容会逐字出现在这里。首次生成通常需要十几秒。</div>
             </div>
-            <div class="acts">
-              <button class="btn btn-p" @click="project.goto(1)">确认这一稿，看大纲</button>
-              <button class="btn btn-s" :disabled="project.contentBusy" @click="doGenScript">{{ project.contentBusy ? '生成中…' : '重新生成这一稿' }}</button>
-            </div>
-            <div class="note">剧本由你配置的模型生成；没有配置文本模型时不会有任何剧本内容。</div>
-          </template>
-          <template v-else>
-            <p>还没有剧本。用你在设置里配置的文本模型，根据想法生成第一稿。</p>
-            <div v-if="project.contentError" class="hint-warn">{{ project.contentError }}</div>
-            <div v-if="project.contentBusy" class="gen-busy">
-              <span class="busy-dot"></span> 正在调用你配置的文本模型生成剧本…
-            </div>
-            <div v-if="project.streamText" class="stream-text">{{ project.streamText }}<span class="caret">▍</span></div>
-            <div class="acts">
-              <button class="btn btn-p" :disabled="project.contentBusy" @click="doGenScript">{{ project.contentBusy ? '正在生成…' : '用我的模型生成剧本' }}</button>
-              <button class="btn btn-s" @click="router.push('/settings')">去配置文本模型</button>
-            </div>
-            <div class="note">没有配置或没测通文本模型时，这里不会显示任何假剧本。</div>
-          </template>
+          </div>
+          <div v-if="project.streamText" class="stream-text">{{ project.streamText }}<span class="caret">▍</span></div>
+          <div v-else class="stream-placeholder">正在等待模型返回第一个字…</div>
+        </div>
+        <!-- 生成失败：说清原因 + 给出路 -->
+        <div v-else-if="scriptState === 'error'" class="card-bd">
+          <div class="state-t">没生成成功</div>
+          <div class="hint-warn">{{ project.contentError }}</div>
+          <div class="acts">
+            <button class="btn btn-p" @click="doGenScript">重新生成</button>
+            <button class="btn btn-s" @click="router.push('/settings')">检查模型配置</button>
+          </div>
+        </div>
+        <!-- 空态：一句话说明 + 一个主动作 -->
+        <div v-else-if="scriptState === 'empty'" class="card-bd">
+          <p>根据这个项目想法，用你配置的文本模型写一部 3 集竖屏短剧。</p>
+          <div class="acts">
+            <button class="btn btn-p" @click="doGenScript">用我的模型生成剧本</button>
+            <button class="btn btn-s" @click="router.push('/settings')">配置模型</button>
+          </div>
+          <div class="note">还没配置模型？先去「设置」里添加文本模型并测通，再回来生成。</div>
+        </div>
+        <!-- 已完成 -->
+        <div v-else class="card-bd">
+          <p>第一稿已写好，共 {{ script.episodes.length }} 集，已保存到本机。</p>
+          <div class="script" style="margin-top:14px">
+            <template v-for="(ep, i) in script.episodes" :key="i">
+              <p><b>第 {{ ep.idx || i + 1 }} 集 · {{ ep.title }}</b></p>
+              <p>{{ ep.script }}</p>
+            </template>
+          </div>
+          <div class="acts">
+            <button class="btn btn-p" @click="project.goto(1)">确认这一稿，看大纲</button>
+            <button class="btn btn-s" @click="doGenScript">重新生成这一稿</button>
+          </div>
         </div>
       </template>
       <!-- 第 2 步 -->
