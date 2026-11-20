@@ -543,3 +543,18 @@ def test_project_soft_delete_and_restore():
     r = client.post(f"/api/projects/{pid}/restore", headers=HEADERS)
     assert r.status_code == 200 and r.json()["restored"] is True
     assert any(p["id"] == pid for p in client.get("/api/projects", headers=HEADERS).json()["items"])
+def test_agent_classifies_flow_commands():
+    """对话必须能识别常见流程指令，否则用户说「开始写剧本」得不到任何动作。"""
+    from engine.app.agent.agent import ConversationAgent
+    a = ConversationAgent()
+    cases = {
+        "开始写剧本": "gen_script",
+        "帮我生成第一稿": "gen_script",
+        "生成定妆图": "gen_characters",
+        "拆分镜头": "gen_shots",
+        "开始生成画面": "gen_video",
+        "导出视频": "export_video",
+        "去设置配置模型": "route_to_settings",
+    }
+    for text, expected in cases.items():
+        assert a.classify(text) == expected, f"{text} 应识别为 {expected}"

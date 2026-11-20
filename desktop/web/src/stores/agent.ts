@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { engine } from '@/api/engine'
 import { useProjectStore } from './project'
 import { useUiStore } from './ui'
+import { useGenStore } from './gen'
 /** 对话 Agent（设计 §6.5 / §5.3）：SSE 三事件 + 意图确认门。
  *  Never 层：未确认的写操作一律不执行；确认后由前端调对应业务接口。 */
 export interface ChatMessage { role: 'user' | 'agent'; text: string }
@@ -85,6 +86,13 @@ export const useAgentStore = defineStore('agent', () => {
     if (!intent) return '没有待确认的操作'
     const project = useProjectStore()
     const ui = useUiStore()
+    const gen = useGenStore()
+    if (!project.currentId && !['route_to_recharge', 'route_to_settings'].includes(intent.op)) {
+      pendingIntent.value = null
+      const msg = '还没有选中的项目，请先到首页创建或打开一个项目'
+      messages.value.push({ role: 'agent', text: msg })
+      return msg
+    }
     if (intent.cost_impact > 0) {
       const w = await engine.api<{ balance: number }>('/api/wallet')
       if (w && w.balance < intent.cost_impact) {
@@ -98,6 +106,31 @@ export const useAgentStore = defineStore('agent', () => {
     let msg = ''
     try {
       switch (intent.op) {
+        case 'gen_script': {
+          const r = await project.genScript(project.script ? project.scriptVer + 1 : 1)
+          msg = r.ok ? '剧本已由你配置的模型生成' : (r.error || '剧本生成失败')
+          break
+        }
+        case 'gen_characters': {
+          const r = await project.genCharacters(5)
+          msg = r.ok ? '定妆图已生成，去第 3 步查看' : (r.error || '定妆图生成失败')
+          break
+        }
+        case 'gen_shots': {
+          const r = await project.genShots(12)
+          msg = r.ok ? '镜头已拆分，去第 5 步查看' : (r.error || '镜头拆分失败')
+          break
+        }
+        case 'gen_video': {
+          const r = await gen.start(project.currentId!, 12)
+          msg = r.ok ? '已开始生成画面，去第 6 步看进度' : (r.hint || r.error || '无法开始生成')
+          break
+        }
+        case 'export_video': {
+          const work = await project.exportWork()
+          msg = work ? '成片已存入本机作品库（带 AI 标识）' : '导出失败：请先完成画面生成'
+          break
+        }
         case 'regen_script': {
           const r = await project.genScript(project.scriptVer + 1)
           msg = r.ok ? '剧本已重新生成' : (r.error || '剧本生成失败')

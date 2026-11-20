@@ -32,12 +32,15 @@ class EngineClient {
       }
     } else {
       this.mode = 'browser'
+      // 浏览器预览默认连 7420；可用 VITE_ENGINE_PORT 指向别的本地引擎（调试多实例）
+      const port = Number((import.meta.env.VITE_ENGINE_PORT as string | undefined) || 7420)
+      const base = `http://127.0.0.1:${port}`
       try {
-        const h = await fetch('http://127.0.0.1:7420/health', { cache: 'no-store' })
+        const h = await fetch(`${base}/health`, { cache: 'no-store' })
         if (h.ok) {
-          const t = await fetch('http://127.0.0.1:7420/api/local-token', { cache: 'no-store' })
+          const t = await fetch(`${base}/api/local-token`, { cache: 'no-store' })
           const j = await t.json()
-          info = { running: true, port: 7420, token: j.token, base_url: 'http://127.0.0.1:7420' }
+          info = { running: true, port, token: j.token, base_url: base }
         }
       } catch (e) {
         this.error = '未检测到本地引擎，请先启动鲸鲨漫剧桌面应用'

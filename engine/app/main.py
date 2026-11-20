@@ -193,7 +193,11 @@ async def generate_script(pid: str, req: ScriptGenReq = ScriptGenReq()):
     try:
         return await CONTENT.generate_script(pid, p["idea_text"], req.version)
     except NoProviderError as exc:
-        raise HTTPException(400, {"code": exc.code, "message": str(exc), "hint": "到设置里配置文本模型并测试连接"})
+        raw = str(exc)
+        is_quota = "quota" in raw.lower() or "429" in raw or "rate" in raw.lower()
+        message = "厂商额度或频率限制，暂时无法生成" if is_quota else raw
+        hint = "等额度恢复或升级套餐；这不是模型配置问题" if is_quota else "到设置里配置文本模型并测试连接"
+        raise HTTPException(400, {"code": exc.code, "message": message, "hint": hint})
 class CharactersGenReq(BaseModel):
     count: int = Field(default=5, ge=1, le=20)
 @app.post("/api/projects/{pid}/characters/generate", dependencies=[Depends(auth)])

@@ -1,6 +1,8 @@
 """对话 Agent：工具白名单 + 意图改写 + 确认门（设计 v3.1 §5.3）。
-Never 层：白名单没有 approve_checkpoint / start_generation / 扣费工具。
+Never 层：白名单没有 approve_checkpoint / 扣费工具。
 未确认的写操作一律不执行——Agent 不能"顺手"替用户花钱。
+流程类意图（写剧本/定妆/拆镜/生成画面/导出）只产出意图，实际调用由前端在
+用户确认后执行已有业务接口；Agent 自身不执行写操作，不绕过任何检查点。
 """
 from __future__ import annotations
 from dataclasses import asdict, dataclass
@@ -9,6 +11,9 @@ ALLOWED_TOOLS = frozenset({
     "get_script", "get_shots", "get_characters",
     "regen_script", "adjust_pacing", "swap_role_image",
     "answer_question", "route_to_recharge", "route_to_settings",
+    # 流程驱动意图：仅表达用户想做哪一步，由前端确认后调对应业务接口；
+    # 不含 approve_checkpoint / 直接扣费工具，安全边界不变。
+    "gen_script", "gen_characters", "gen_shots", "gen_video", "export_video",
 })
 @dataclass
 class Intent:
@@ -22,10 +27,18 @@ class Intent:
 # 白话 → 结构意图（规则兜底，无需 LLM 即可离线跑通；生产由 LLM 单次调用产出同结构）
 _RULES = (
     # op 必须与 ALLOWED_TOOLS 的工具名一致（否则确认后也被白名单拒绝）
+    # 流程驱动（放在最前，避免被"重写/换一版"等宽泛词抢先匹配）
+    (("开始写剧本", "写剧本", "写第一稿", "生成第一稿", "生成剧本", "开始创作", "写个剧本", "写一部"), "gen_script", 0.0, "用你配置的文本模型生成剧本"),
+    (("定妆图", "角色形象", "生成角色", "做角色"), "gen_characters", 0.0, "用图片模型生成角色定妆图"),
+    (("拆镜头", "拆分镜头", "分镜", "生成镜头"), "gen_shots", 0.0, "用文本模型拆分镜头"),
+    (("生成画面", "生成视频", "开始生成", "跑生成", "出画面"), "gen_video", 9.0, "按镜头生成真实画面（约按镜头数计费）"),
+    (("导出", "成片", "导出视频"), "export_video", 0.0, "把生成的画面导出成片"),
+    # 修改类
     (("太快", "节奏", "慢一点", "铺垫"), "adjust_pacing", 9.0, "在铺垫处多加一个镜头"),
     (("换脸", "形象", "重做角色", "角色不像"), "swap_role_image", 0.0, "重新生成角色参考图"),
     (("重写", "改剧本", "换一版", "不满意"), "regen_script", 0.0, "按你的意见重写剧本"),
     (("额度", "充值", "没钱", "费用"), "route_to_recharge", 0.0, "去充值额度"),
+    (("设置", "配置模型"), "route_to_settings", 0.0, "打开模型设置"),
 )
 class ConversationAgent:
     def __init__(self, llm_caller=None):
