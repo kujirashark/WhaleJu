@@ -1,10 +1,13 @@
 """鲸鲨漫剧本地引擎 FastAPI 入口（127.0.0.1:7420）。"""
 from __future__ import annotations
+import asyncio
+import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from .adapters.base import VideoGenRequest
 from .adapters.mock_provider import MockProvider
@@ -16,6 +19,7 @@ from .storage.vault import encrypt, mask
 from .adapters.openai_compat import OpenAICompatProvider
 from .workflow.state_machine import GuardError, WorkflowEngine
 from .workflow.checkpoints import CheckpointManager
+from .workflow.generation import GenerationManager
 from .agent.agent import ConversationAgent, Intent
 from .publish.kit import PublishKit
 DATA_DIR = Path(os.getenv("MANGJU_DATA_DIR", str(Path.cwd() / "engine" / "data")))
@@ -27,6 +31,7 @@ AGENT = ConversationAgent()
 REGISTRY = ProviderRegistry()
 REGISTRY.register(MockProvider())
 PUBLISH = PublishKit(DATA_DIR)
+GENERATIONS = GenerationManager(DB, LEDGER, REGISTRY)
 # 本地鉴权 Token：优先使用桌面壳通过 IPC 注入的随机令牌；
 # 独立运行时自动生成，重启轮换（防本机其他进程调用）。
 # 任何情况下都不通过公开接口下发——Tauri 侧由 start_engine 直接返回。
@@ -50,8 +55,11 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["X-Local-Token", "Content-Type"],
 )
-def auth(x_local_token: str | None = Header(default=None)):
-    if x_local_token != LOCAL_TOKEN:
+def auth(x_local_token: str | None = Header(default=None), token: str | None = None):
+    """本地鉴权：优先 header；SSE(EventSource 无法自定义 header) 允许 query token。
+    仅绑定 127.0.0.1，query token 不会出本机；生产桌面运行时令牌经 IPC 取得。
+    """
+    if (x_local_token or token) != LOCAL_TOKEN:
         raise HTTPException(401, "本地引擎鉴权失败")
 class CreateProject(BaseModel):
     idea: str = Field(min_length=10, max_length=2000)
@@ -144,9 +152,25 @@ class DecideReq(BaseModel):
     payload: dict = Field(default_factory=dict)
 @app.post("/api/chat", dependencies=[Depends(auth)])
 async def chat(req: ChatReq):
-    """对话：返回结构意图（intent），不执行写操作；确认由前端调用业务接口完成。"""
+    """对话（JSON 版）：返回结构意图（intent），不执行写操作。"""
     intent = await AGENT.rewrite(req.message, req.project_id)
     return {"intent": intent.to_dict()}
+@app.post("/api/chat/stream", dependencies=[Depends(auth)])
+async def chat_stream(req: ChatReq):
+    """对话（SSE 版，设计 §6.5）：token / intent / done 三事件。
+    Never 层：只推 intent，绝不执行写操作；用户确认后由前端调业务接口。
+    """
+    intent = await AGENT.rewrite(req.message, req.project_id)
+    async def events():
+        # token 事件：白话逐字回显（规则模式下整段一句，生产由 LLM token 流替换）
+        reply = intent.confirm or "我记下了，先按现在的方案继续。"
+        for i in range(0, len(reply), 6):
+            yield f"event: token\ndata: {json.dumps({'t': reply[i:i+6]}, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0.02)
+        yield f"event: intent\ndata: {json.dumps(intent.to_dict(), ensure_ascii=False)}\n\n"
+        yield f"event: done\ndata: {json.dumps({'history_cursor': ulid()}, ensure_ascii=False)}\n\n"
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 @app.post("/api/agent/execute", dependencies=[Depends(auth)])
 def agent_execute(intent: Intent):
     return AGENT.execute(intent)
@@ -246,6 +270,46 @@ async def test_model_config(slot: str):
     return {"ok": result.ok, "latency_ms": result.latency_ms,
             "abilities": list(result.abilities), "price_hint": result.price_hint,
             "error": result.error, "mock": False}
+class GenStartReq(BaseModel):
+    shot_count: int = Field(default=12, ge=1, le=60)
+@app.post("/api/projects/{pid}/generation/start", dependencies=[Depends(auth)])
+async def generation_start(pid: str, req: GenStartReq = GenStartReq()):
+    """设计 §6.4：开始生成批次。冻结在提交前，额度不足时 E2001。"""
+    p = DB.get("projects", pid)
+    if not p:
+        raise HTTPException(404, "项目不存在")
+    wallet = LEDGER.wallet()
+    if wallet["balance"] < PRICE_PER_SHOT_ESTIMATE * req.shot_count:
+        raise HTTPException(400, {
+            "code": "E2001", "message": "额度不够跑完这批",
+            "need": PRICE_PER_SHOT_ESTIMATE * req.shot_count,
+            "balance": wallet["balance"],
+        })
+    batch = await GENERATIONS.start(pid, req.shot_count)
+    return {"batch_id": batch.id, "queued": req.shot_count,
+            "route_reason": "按镜头重要性自动分配：重要镜头优先自带模型，过渡镜头走平台额度"}
+PRICE_PER_SHOT_ESTIMATE = 9.0
+@app.post("/api/projects/{pid}/generation/pause", dependencies=[Depends(auth)])
+async def generation_pause(pid: str):
+    r = await GENERATIONS.pause(pid)
+    if r is None:
+        raise HTTPException(404, "没有进行中的生成批次")
+    return {"paused": True, "done": r["done"], "total": r["total"]}
+@app.post("/api/projects/{pid}/generation/resume", dependencies=[Depends(auth)])
+async def generation_resume(pid: str):
+    r = await GENERATIONS.resume(pid)
+    if r is None:
+        raise HTTPException(404, "没有可恢复的生成批次")
+    return {"resumed": True, "done": r["done"], "total": r["total"]}
+@app.get("/api/projects/{pid}/generation/progress", dependencies=[Depends(auth)])
+async def generation_progress(pid: str):
+    """进度是引擎事实；前端只渲染，不做业务判断。"""
+    r = GENERATIONS.progress(pid)
+    if r is None:
+        return {"done": 0, "total": 12, "running": 0, "failed": 0,
+                "queued": 12, "paused": False, "eta_s": None,
+                "failed_items": [], "items": []}
+    return r
 @app.post("/api/generation/submit", dependencies=[Depends(auth)])
 async def generation_submit(req: GenReq):
     """W1 冒烟：Mock 通道跑通 submit→poll→冻结→结算。"""

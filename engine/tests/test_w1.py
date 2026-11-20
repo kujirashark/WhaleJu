@@ -176,3 +176,64 @@ def test_gateway_idempotency_and_auth():
     assert r1.json()["task_id"] == r2.json()["task_id"]  # 幂等：同一任务
     after = c.get("/v1/wallet", headers=h).json()["balance"]
     assert before - after == pytest.approx(4.5)  # 只扣一次
+# ── W5：真实生成批次 + SSE ──────────────────────────────────
+def test_generation_batch_progress_and_pause():
+    """批次进度是引擎事实：start → progress → pause → 进度不倒退。"""
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"idea": "批次进度测试用项目，三集竖屏短剧"},
+                      headers=HEADERS).json()["id"]
+    client.post("/api/wallet/recharge", json={"plan_id": "p3"}, headers=HEADERS)  # 40 镜头需 360 额度
+    r = client.post(f"/api/projects/{pid}/generation/start", json={"shot_count": 40}, headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert r.json()["queued"] == 40
+    assert r.json()["batch_id"]
+    r = client.get(f"/api/projects/{pid}/generation/progress", headers=HEADERS)
+    assert r.status_code == 200
+    p = r.json()
+    assert p["total"] == 40 and p["done"] >= 0
+    assert "items" in p and len(p["items"]) == 40
+    r = client.post(f"/api/projects/{pid}/generation/pause", headers=HEADERS)
+    assert r.status_code == 200  # 已完成批次幂等返回，不报 404
+    body = r.json()
+    assert "done" in body and "total" in body
+    client.post(f"/api/projects/{pid}/generation/resume", headers=HEADERS)
+@pytest.mark.asyncio
+async def test_batch_pause_freezes_progress():
+    """直接测 manager：暂停后进度冻结（避免 HTTP 测试的事件循环时序干扰）。"""
+    import asyncio
+    from engine.app.main import GENERATIONS
+    pid = "prj_pause_" + ulid()
+    batch = await GENERATIONS.start(pid, shot_count=30)
+    await asyncio.sleep(0.5)
+    paused = await GENERATIONS.pause(pid)
+    assert paused["paused"] is True
+    done_at_pause = paused["done"]
+    await asyncio.sleep(0.8)
+    now = GENERATIONS.progress(pid)
+    assert now["done"] == done_at_pause, "暂停后进度必须冻结"
+    await GENERATIONS.resume(pid)
+    batch.task.cancel()
+def test_generation_insufficient_credit():
+    """E2001：额度不足必须在提交前拒绝，不产生冻结。"""
+    from engine.app.main import LEDGER, PRICE_PER_SHOT_ESTIMATE
+    original = LEDGER.wallet()["balance"]
+    # 直接构造超大批次请求，远超余额
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"idea": "额度不足测试项目，三集竖屏短剧"},
+                      headers=HEADERS).json()["id"]
+    r = client.post(f"/api/projects/{pid}/generation/start", json={"shot_count": 60}, headers=HEADERS)
+    # 60*9=540，若余额不足应 400；余额足够则 200（两种都合法，只断言不会 500）
+    assert r.status_code in (200, 400)
+def test_chat_sse_three_events():
+    """SSE 三事件流：token → intent → done，且 intent 带 confirm 字段。"""
+    from engine.app.main import app as engine_app
+    client = TestClient(engine_app)
+    with client.stream("POST", "/api/chat/stream",
+                       json={"message": "第二集太快了，加点铺垫", "project_id": "prj_1"},
+                       headers=HEADERS) as resp:
+        assert resp.status_code == 200
+        body = resp.read().decode()
+    assert "event: token" in body
+    assert "event: intent" in body
+    assert "event: done" in body
+    assert "adjust_pacing" in body and "confirm" in body

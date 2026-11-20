@@ -3,23 +3,27 @@ import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { IMG, ROLES, SHOTS } from '@/constants'
 import { useProjectStore } from '@/stores/project'
+import { useGenStore } from '@/stores/gen'
 import { useUiStore } from '@/stores/ui'
 import { engine } from '@/api/engine'
 const router = useRouter()
 const project = useProjectStore()
+const gen = useGenStore()
 const ui = useUiStore()
 const step = computed(() => project.step)
-const done = computed(() => project.gen.done)
+const done = computed(() => gen.done)
 function confirmRoles() {
   if (!project.selectedRoles.size) { ui.toast('至少选一个角色'); return }
   project.goto(3)
   ui.toast(`已选 ${project.selectedRoles.size} 个角色`)
 }
 async function startGen() {
-  await project.submitGen('人的一生 · 黄昏院子里的孩子')
   project.goto(5)
-  project.startGen()
-  ui.toast(project.routeReason ? `已提交本机引擎：${project.routeReason}` : '开始生成，失败的会自动换一家重试')
+  const projectId = project.currentId || 'current'
+  const ok = await gen.start(projectId, 12)
+  ui.toast(ok
+    ? `已提交本机引擎：${gen.routeReason || '按镜头重要性自动分配'}`
+    : '引擎未连接，当前为演示进度（不写入本机账本）')
 }
 async function doExport() {
   project.startExport()
@@ -134,25 +138,38 @@ const money = (n: number) => `${n} 元`
           <div class="progress"><i v-for="n in 12" :key="n" :class="{ on: n <= done }"></i></div>
           <div style="display:flex;justify-content:space-between;align-items:baseline">
             <span class="big-num">{{ Math.round(done / 12 * 100) }}%</span>
-            <span style="font-size:11px;color:var(--ink3);font-family:var(--mono)">已完成 {{ done }} 个 · 失败 {{ done < 5 ? 1 : 0 }} 个（不计费）</span>
+            <span style="font-size:11px;color:var(--ink3);font-family:var(--mono)">已完成 {{ done }} 个 · 失败 {{ gen.failed }} 个（不计费）<template v-if="gen.eta"> · 约 {{ gen.eta }} 秒</template></span>
           </div>
           <table class="table" style="margin-top:12px">
             <tbody>
-              <tr v-for="s in SHOTS" :key="s.i">
+              <tr v-for="(s, idx) in SHOTS" :key="s.i">
                 <td><img :src="s.img" alt=""></td><td>{{ s.i }}. {{ s.t }}</td><td>{{ s.model }}</td>
                 <td style="text-align:right">
-                  <span v-if="s.i <= done" class="chip c-ok">可用</span>
-                  <span v-else-if="project.gen.running && s.i === done + 1" class="chip c-run">生成中</span>
-                  <template v-else-if="s.i === 5 && done < 5"><span class="chip c-fail">失败</span> <button class="btn btn-t" @click="ui.toast('已重新排队，失败的任务不收费')">重试</button></template>
-                  <span v-else class="chip c-wait">排队中</span>
+                  <!-- 引擎事实优先：gen.items 由 /generation/progress 返回 -->
+                  <template v-if="gen.items.length">
+                    <span v-if="gen.items[idx]?.status === 'done'" class="chip c-ok">可用</span>
+                    <span v-else-if="gen.items[idx]?.status === 'running'" class="chip c-run">生成中</span>
+                    <template v-else-if="gen.items[idx]?.status === 'failed'">
+                      <span class="chip c-fail">失败</span>
+                      <button class="btn btn-t" @click="ui.toast('已重新排队，失败的任务不收费')">重试</button>
+                    </template>
+                    <span v-else class="chip c-wait">排队中</span>
+                  </template>
+                  <!-- 演示降级：无引擎连接时按本地序号推算 -->
+                  <template v-else>
+                    <span v-if="s.i <= done" class="chip c-ok">可用</span>
+                    <span v-else-if="!gen.paused && s.i === done + 1" class="chip c-run">生成中</span>
+                    <span v-else class="chip c-wait">排队中</span>
+                  </template>
                 </td>
               </tr>
             </tbody>
           </table>
           <div class="acts">
             <template v-if="done < 12">
-              <button class="btn btn-p" @click="project.toggleGen()">{{ project.gen.running ? '暂停生成' : '继续生成' }}</button>
-              <button class="btn btn-s" @click="project.finishGen(); ui.toast('12 个镜头全部完成')">跳过等待，直接完成</button>
+              <button class="btn btn-p" @click="gen.paused ? gen.resume(project.currentId || 'current') : gen.pause(project.currentId || 'current'); ui.toast(gen.paused ? '已暂停，进度已保存' : '继续生成')">{{ gen.paused ? '继续生成' : '暂停生成' }}</button>
+              <button v-if="gen.isDemo" class="btn btn-s" @click="gen.finishDemo(); ui.toast('12 个镜头全部完成')">跳过等待，直接完成</button>
+              <span v-else class="chip c-wait">真实生成中 · 引擎按镜头推进</span>
             </template>
             <template v-else>
               <button class="btn btn-p" @click="project.goto(6)">看前 30 秒</button>

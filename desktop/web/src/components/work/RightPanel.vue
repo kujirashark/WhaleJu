@@ -2,15 +2,17 @@
 import { computed } from 'vue'
 import { ROLES, SHOTS } from '@/constants'
 import { useProjectStore } from '@/stores/project'
+import { useGenStore } from '@/stores/gen'
 const project = useProjectStore()
+const gen = useGenStore()
 const tab = computed(() => project.tab)
-const done = computed(() => project.gen.done)
+const done = computed(() => gen.done)
 const used = computed(() => SHOTS.slice(0, done.value).reduce((a, b) => a + b.cost, 0))
 const fee = computed(() => Math.round(used.value * 0.15 * 10) / 10)
 const money = (n: number) => `${n} 元`
 function shotChip(i: number) {
   if (i <= done.value) return { cls: 'c-ok', text: '可用' }
-  if (project.gen.running && i === done.value + 1) return { cls: 'c-run', text: '生成中' }
+  if (!gen.paused && i === done.value + 1) return { cls: 'c-run', text: '生成中' }
   if (i === 5) return { cls: 'c-fail', text: '失败' }
   return { cls: 'c-wait', text: '排队' }
 }

@@ -1,4 +1,4 @@
-const { chromium } = require('../../prototype/node_modules/playwright-core');
+const { chromium } = require('../prototype/node_modules/playwright-core');
 (async () => {
   const browser = await chromium.launch({ channel: 'chrome' });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -42,8 +42,10 @@ const { chromium } = require('../../prototype/node_modules/playwright-core');
   await page.getByRole('button', { name: '按这个方案生成' }).click();
   await page.waitForTimeout(700);
   console.log('生成步骤:', (await page.locator('.card-hd').first().innerText()).split('\n')[0]);
-  await page.getByRole('button', { name: '跳过等待，直接完成' }).click(); await page.waitForTimeout(150);
-  console.log('完成度:', await page.locator('.big-num').innerText());
+  const skip = page.getByRole('button', { name: '跳过等待，直接完成' });
+  if (await skip.count()) { await skip.click(); await page.waitForTimeout(150); }
+  else console.log('模式: 真实生成进度（无跳过按钮）');
+  console.log('进度:', await page.locator('.big-num').innerText());
   console.log('=== 导出 ===');
   await steps.nth(7).click(); await page.waitForTimeout(120);
   await page.getByRole('button', { name: '开始导出' }).click();

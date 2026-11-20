@@ -11,12 +11,9 @@ export const useProjectStore = defineStore('project', () => {
   const selectedRoles = ref<Set<string>>(new Set(['child', 'teen', 'adult', 'mid', 'old']))
   const locked = ref(false)
   const ratio = ref<'v' | 'h'>('v')
-  const gen = ref({ done: 0, running: false })
   const player = ref({ pos: 0, playing: false })
   const exp = ref({ state: 'idle' as 'idle' | 'running' | 'done', pct: 0 })
   const projects = ref<any[]>([])
-  const routeReason = ref('')
-  let genTimer: ReturnType<typeof setInterval> | undefined
   let playTimer: ReturnType<typeof setInterval> | undefined
   let expTimer: ReturnType<typeof setInterval> | undefined
   function goto(i: number) { step.value = Math.max(0, Math.min(7, Number(i))) }
@@ -39,23 +36,6 @@ export const useProjectStore = defineStore('project', () => {
     const s = new Set(selectedRoles.value)
     s.has(k) ? s.delete(k) : s.add(k)
     selectedRoles.value = s
-  }
-  function startGen() { gen.value.running = true; tickGen() }
-  function toggleGen() { gen.value.running = !gen.value.running; if (gen.value.running) tickGen() }
-  function tickGen() {
-    clearInterval(genTimer)
-    genTimer = setInterval(() => {
-      if (!gen.value.running) return
-      if (gen.value.done >= 12) { gen.value.running = false; clearInterval(genTimer); return }
-      gen.value.done++
-    }, 900)
-  }
-  function finishGen() { gen.value.done = 12; gen.value.running = false; clearInterval(genTimer) }
-  async function submitGen(prompt: string) {
-    const r = await engine.api<{ route_reason: string }>('/api/generation/submit', {
-      method: 'POST', body: { prompt, duration_s: 5, ratio: '9:16', importance: 'key' },
-    })
-    if (r?.route_reason) routeReason.value = r.route_reason
   }
   function togglePlay() {
     if (player.value.playing) {
@@ -89,8 +69,8 @@ export const useProjectStore = defineStore('project', () => {
     })
   }
   return {
-    currentId, step, tab, scriptVer, selectedRoles, locked, ratio, gen, player, exp, projects, routeReason,
-    goto, create, loadProjects, toggleRole, startGen, toggleGen, finishGen, submitGen,
+    currentId, step, tab, scriptVer, selectedRoles, locked, ratio, player, exp, projects,
+    goto, create, loadProjects, toggleRole,
     togglePlay, startExport, exportWork,
   }
 })

@@ -57,11 +57,14 @@ cd .. && npm install && npm run dev     # 或 npm run build 打包 msi/nsis
 - 导出强制带 AI 生成标识（API 层 + 合成层双强制）
 ## 6. 已知限制
 - 视频槽仍是 Mock：无真实素材时导出生成 `demo=true` 演示片，不得作为正式作品发布
-- 生成进度、播放器是原型演示动画，未接引擎真实 SSE 进度（设计 W5）
-- 引擎 `/api/chat` 只做意图改写，pending intent 的确认执行尚未接业务接口
+- 生成进度已接引擎真实 `/generation/progress`（W5 完成）；**播放器**仍是演示动画（未接真实素材）
+- SSE 对话已接三事件流与意图确认门（`agent.confirm()` 调 `/api/agent/execute`）；LLM 改写目前是规则兜底
 - 未做：桌面原生菜单、自动更新、代码签名
 ## 7. 验证记录
 - TypeScript：`vue-tsc --noEmit` 通过
 - 构建：Vite 产出 8 个 JS chunk + CSS + 6 张剧照，无 CSS 语法告警
 - Playwright：`desktop/_test_vue.cjs` 全量通过——首页、8 步导航、角色多选 5→4、CP 弹窗锁定、生成提交、导出落库、作品库 4 卡、设置 4 组/密钥行、充值后端到账、主题切换、hash 路由，无 400/404、无 JS 错误
 - Tauri 实机：`npx tauri dev` 加载 Vue 前端成功，IPC 拉起引擎（health 200）
+- W5（真实进度 + SSE）：真实批次 start/pause/progress 全通；暂停后进度冻结实测 4/12 保持不变；
+  SSE 三事件流逐字回显 + 意图确认条实测（确认文案与成本影响正确显示，取消不执行任何写操作）；
+  原 Vue 全量回归无退化
