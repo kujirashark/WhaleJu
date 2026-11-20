@@ -131,6 +131,23 @@ def test_model_test_with_config_returns_verified(monkeypatch):
     cap = client.get("/api/capabilities", headers=HEADERS).json()
     assert cap["ready"]["text"] is True
     assert REGISTRY.has_ability("text") is True
+def test_model_test_404_hints_missing_v1(monkeypatch):
+    """404 时必须提示地址缺少 /v1，而不是让用户对着 NOT_FOUND 猜测。"""
+    import engine.app.main as main_mod
+    from engine.app.adapters.base import ProbeResult
+    async def fake_probe(self):
+        return ProbeResult(ok=False, error='HTTP 404 · {"error":{"code":5,"message":"NOT_FOUND"}}')
+    monkeypatch.setattr(main_mod.ConfiguredProvider, "probe", fake_probe)
+    client = TestClient(app)
+    client.put("/api/model-configs/text", json={
+        "source": "proxy", "provider_kind": "openai_compat", "name": "stub",
+        "endpoint": "https://example.invalid", "model": "stub-model",
+        "credential": "sk-test-1234567890",
+    }, headers=HEADERS)
+    r = client.post("/api/model-configs/text/test", headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is False
+    assert "/v1" in r.json()["error"]
 def test_capabilities_reports_readiness():
     """能力就绪接口：未配置时 all_ready=False，供前端明确引导。"""
     client = TestClient(app)

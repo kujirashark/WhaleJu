@@ -96,9 +96,16 @@ export const useSettingsStore = defineStore('settings', () => {
     probeResults.value[slot] = ''
     engine.error = ''
     try {
-      // 若用户改了草稿但未保存，先保存再测试
+      // 若用户改了草稿但未保存，先保存再测试；保存失败必须中止，
+      // 否则会用库里的旧配置去探测，报出与界面无关的错误
       const d = drafts.value[slot]
-      if (d.endpoint || d.model || d.credential) await saveOne(slot)
+      if (d.endpoint || d.model || d.credential) {
+        const saved = await saveOne(slot)
+        if (!saved) {
+          probeResults.value[slot] = probeResults.value[slot] || `保存失败：${engine.error || '请检查地址和模型'}`
+          return false
+        }
+      }
       const r = await engine.api<{ ok: boolean; verified: boolean; error?: string; price_hint?: string }>(
         `/api/model-configs/${slot}/test`, { method: 'POST' },
       )

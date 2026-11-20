@@ -36,7 +36,7 @@ const needKey = computed(() => choice.value !== 'local')
         <label class="cf">
           <span>服务地址 <em>必填</em></span>
           <input v-model="draft.endpoint" type="url" :placeholder="isLocal ? 'http://127.0.0.1:11434/v1' : 'https://api.example.com/v1'" :aria-label="`${title} 服务地址`">
-          <small>{{ isLocal ? '填你本机/内网模型的地址；本机没部署就不能用这一项' : '填厂商的 OpenAI 兼容接口地址' }}</small>
+          <small>{{ isLocal ? '填你本机/内网模型的地址（通常到 /v1 为止）；本机没部署就不能用这一项' : '填 OpenAI 兼容根地址，一般到 /v1 为止；不要带 /models 或 /chat/completions' }}</small>
         </label>
         <label class="cf">
           <span>模型标识 <em>必填</em></span>

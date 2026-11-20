@@ -363,9 +363,12 @@ async def test_model_config(slot: str):
         with DB.tx() as c:
             c.execute("UPDATE model_configs SET verified=0 WHERE id=?", (row["id"],))
         refresh_providers()
+    error = result.error
+    if not result.ok and error and "404" in error:
+        error += "；服务地址应填到 /v1 为止（如 https://厂商域名/v1），不要带 /models 或 /chat/completions"
     return {"ok": result.ok, "verified": result.ok, "latency_ms": result.latency_ms,
             "abilities": list(result.abilities), "price_hint": result.price_hint,
-            "error": result.error, "mock": False}
+            "error": error, "mock": False}
 @app.get("/api/capabilities", dependencies=[Depends(auth)])
 def capabilities():
     """各能力槽的就绪状态，供前端在生成前明确提示未配置项。"""
