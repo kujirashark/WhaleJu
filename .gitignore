@@ -8,3 +8,15 @@ prototype/_check_*.js
 prototype/_w_*.png
 prototype/_3d_*.png
 prototype/_logo_*.png
+# Python venv & runtime data
+.venv/
+engine/data/
+__pycache__/
+*.pyc
+.pytest_cache/
+# UI QA screenshots
+prototype/_r*_*.png
+prototype/_3d_*.png
+prototype/_w_*.png
+prototype/_shot*.png
+prototype/_mmd*
