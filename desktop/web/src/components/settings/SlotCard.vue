@@ -20,6 +20,13 @@ async function onTest() {
 }
 const isLocal = computed(() => choice.value === 'local')
 const needKey = computed(() => choice.value !== 'local')
+async function onSave() {
+  const ok = await settings.saveOne(props.id)
+  if (!ok) { ui.toast(settings.probeResults[props.id] || '保存失败'); return }
+  // saveOne 不刷新 server，这里拉一次权威状态再决定提示，避免用旧 verified 误报
+  await settings.load()
+  ui.toast(verified.value ? '配置已保存，这个能力仍处于已验证可用状态' : '配置已保存，请点「测试连接」验证')
+}
 // 密钥已保存到本机时显示掩码（服务端只返回 has_credential，绝不回显明文）
 const hasSavedKey = computed(() => !!server.value.has_credential)
 const keyPlaceholder = computed(() =>
@@ -52,7 +59,7 @@ const keyPlaceholder = computed(() =>
           <input v-model="draft.credential" type="password" :placeholder="keyPlaceholder" :aria-label="`${title} API 密钥`">
         </label>
         <div class="cf-row">
-          <button class="btn btn-s" :disabled="settings.probing[id]" @click="settings.saveOne(id); ui.toast('配置已保存到本机')">保存</button>
+          <button class="btn btn-s" :disabled="settings.probing[id]" @click="onSave">保存</button>
           <button class="btn btn-p" :disabled="settings.probing[id]" @click="onTest">{{ settings.probing[id] ? '测试中…' : '测试连接' }}</button>
           <span v-if="verified" class="chip c-ok">已验证可用</span>
           <span v-else class="chip c-wait">未验证 · 不能用于生成</span>

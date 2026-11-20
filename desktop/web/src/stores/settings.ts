@@ -85,7 +85,11 @@ export const useSettingsStore = defineStore('settings', () => {
     })
     if (r) {
       d.credential = '' // 提交后内存即清，界面不再回显
-      probeResults.value[slot] = '已保存，请点「测试连接」验证'
+      // 已测通的配置再次保存时，别再让用户去点测试连接——服务端保留了 verified
+      const verified = !!r?.slot?.verified
+      probeResults.value[slot] = verified
+        ? '已保存，这个能力仍处于已验证可用状态'
+        : '已保存，请点「测试连接」验证'
     }
     return !!r
   }
