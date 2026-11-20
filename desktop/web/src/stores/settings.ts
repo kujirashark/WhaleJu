@@ -94,6 +94,7 @@ export const useSettingsStore = defineStore('settings', () => {
   async function test(slot: string): Promise<boolean> {
     probing.value[slot] = true
     probeResults.value[slot] = ''
+    engine.error = ''
     try {
       // 若用户改了草稿但未保存，先保存再测试
       const d = drafts.value[slot]
@@ -103,7 +104,7 @@ export const useSettingsStore = defineStore('settings', () => {
       )
       probeResults.value[slot] = r?.ok
         ? `连接测试通过${r.price_hint ? ' · ' + r.price_hint : ''}`
-        : `连接测试失败：${r?.error || '请检查地址和密钥'}`
+        : `连接测试失败：${r?.error || (engine.error ? `引擎错误：${engine.error}` : '请检查地址和密钥')}`
       await load()
       return !!r?.ok
     } finally {

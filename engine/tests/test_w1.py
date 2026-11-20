@@ -1,5 +1,10 @@
 """W1 测试：状态机、存储、计费、API 冒烟。"""
 from __future__ import annotations
+import os
+import tempfile
+# 测试必须用独立临时数据目录：main.py 在 import 时就固定 DATA_DIR，
+# 否则 clean_db 夹具会清空用户真实 engine/data（配置、密钥、作品）。
+os.environ["MANGJU_DATA_DIR"] = tempfile.mkdtemp(prefix="mangju-test-")
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -105,6 +110,27 @@ def test_model_test_rejects_unconfigured():
     r = client.post("/api/model-configs/video/test", headers=HEADERS)
     assert r.status_code == 200
     assert r.json()["ok"] is False and r.json()["verified"] is False
+def test_model_test_with_config_returns_verified(monkeypatch):
+    """已配置槽位测试连接不能 500：sqlite3.Row 必须先转 dict（历史 bug 回归）。"""
+    import engine.app.main as main_mod
+    from engine.app.adapters.base import ProbeResult
+    async def fake_probe(self):
+        return ProbeResult(ok=True, latency_ms=12,
+                           abilities=(self.meta.abilities[0],), price_hint="stub ok")
+    monkeypatch.setattr(main_mod.ConfiguredProvider, "probe", fake_probe)
+    client = TestClient(app)
+    r = client.put("/api/model-configs/text", json={
+        "source": "owned", "provider_kind": "openai_compat", "name": "stub",
+        "endpoint": "https://example.invalid/v1", "model": "stub-model",
+        "credential": "sk-test-1234567890",
+    }, headers=HEADERS)
+    assert r.status_code == 200, r.text
+    r = client.post("/api/model-configs/text/test", headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True and r.json()["verified"] is True
+    cap = client.get("/api/capabilities", headers=HEADERS).json()
+    assert cap["ready"]["text"] is True
+    assert REGISTRY.has_ability("text") is True
 def test_capabilities_reports_readiness():
     """能力就绪接口：未配置时 all_ready=False，供前端明确引导。"""
     client = TestClient(app)

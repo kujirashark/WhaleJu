@@ -336,6 +336,8 @@ async def test_model_config(slot: str):
         row = c.execute(
             "SELECT * FROM model_configs WHERE slot=? AND is_active=1", (slot,)
         ).fetchone()
+    # sqlite3.Row 没有 .get()：必须转成 dict，否则已配置时测试连接直接 500
+    row = dict(row) if row else None
     if not row or not row.get("endpoint"):
         return {"ok": False, "verified": False, "error": "请先填写服务地址并保存", "mock": False}
     key = ""
