@@ -555,9 +555,24 @@ def test_agent_classifies_flow_commands():
         "开始生成画面": "gen_video",
         "导出视频": "export_video",
         "去设置配置模型": "route_to_settings",
+        # 用户直接给内容规格、没有显式动词"生成"时，也要识别为写剧本
+        "我的第1-100岁，100集，第一集": "gen_script",
+        "改成三集短剧": "gen_script",
     }
     for text, expected in cases.items():
         assert a.classify(text) == expected, f"{text} 应识别为 {expected}"
+def test_chat_stream_qa_has_no_confirmation():
+    """问答类对话不该弹确认条，也不该出现内部 op 代号"已记录"。"""
+    with TestClient(app) as client:
+        with client.stream("POST", "/api/chat/stream", json={"message": "你好"}, headers=HEADERS) as r:
+            assert r.status_code == 200
+            body = r.read().decode()
+        assert '"needs_confirm":false' in body or '"needs_confirm": false' in body
+        assert "已记录" not in body
+        # 真正可执行的意图才需要确认
+        with client.stream("POST", "/api/chat/stream", json={"message": "开始写剧本"}, headers=HEADERS) as r:
+            body = r.read().decode()
+        assert '"needs_confirm":true' in body or '"needs_confirm": true' in body
 def test_script_stream_emits_tokens_and_saves(monkeypatch):
     """流式生成必须逐块推 token，最后落库并推 done。"""
     import engine.app.main as main_mod

@@ -13,6 +13,7 @@ export interface Intent {
   cost_impact: number
   confirm: string
   confirmed: boolean
+  needs_confirm?: boolean  // 问答类为 false，不弹确认条
 }
 export const useAgentStore = defineStore('agent', () => {
   const messages = ref<ChatMessage[]>([])
@@ -61,7 +62,11 @@ export const useAgentStore = defineStore('agent', () => {
           const ev = parseSseChunk(block)
           if (!ev) continue
           if (ev.event === 'token') streaming.value += ev.data.t || ''
-          else if (ev.event === 'intent') pendingIntent.value = ev.data as Intent
+          else if (ev.event === 'intent') {
+            const intent = ev.data as Intent
+            // 问答类不产生可执行动作，不弹确认条
+            if (intent.needs_confirm !== false) pendingIntent.value = intent
+          }
         }
       }
       messages.value.push({ role: 'agent', text: streaming.value || '我记下了。' })
@@ -107,8 +112,10 @@ export const useAgentStore = defineStore('agent', () => {
     try {
       switch (intent.op) {
         case 'gen_script': {
-          const r = await project.genScript(project.script ? project.scriptVer + 1 : 1)
-          msg = r.ok ? '剧本已由你配置的模型生成' : (r.error || '剧本生成失败')
+          // 走流式：卡片会实时逐字刷出内容，用户能立刻看到"正在生成"
+          project.goto(0)  // 切到第 1 步，让反馈可见
+          const r = await project.genScriptStream(project.script ? project.scriptVer + 1 : 1)
+          msg = r.ok ? '剧本已生成，见第 1 步' : (r.error || '剧本生成失败')
           break
         }
         case 'gen_characters': {
@@ -132,8 +139,9 @@ export const useAgentStore = defineStore('agent', () => {
           break
         }
         case 'regen_script': {
-          const r = await project.genScript(project.scriptVer + 1)
-          msg = r.ok ? '剧本已重新生成' : (r.error || '剧本生成失败')
+          project.goto(0)
+          const r = await project.genScriptStream(project.scriptVer + 1)
+          msg = r.ok ? '剧本已重新生成，见第 1 步' : (r.error || '剧本生成失败')
           break
         }
         case 'adjust_pacing': {
@@ -155,11 +163,9 @@ export const useAgentStore = defineStore('agent', () => {
           msg = '已打开设置'
           break
         default:
-          // 纯查询/闲聊类意图仍走引擎确认留痕，但不产生副作用
-          await engine.api('/api/agent/execute', {
-            method: 'POST', body: { ...intent, confirmed: true },
-          })
-          msg = `${intent.op} 已记录`
+          // 兜底：不该出现在这里（无可执行动作的问答已被 needs_confirm 过滤）。
+          // 不再显示 op 代号，也不发假的"已记录"写请求。
+          msg = '这个操作暂时无法执行，请换一种说法或直接点流程按钮'
       }
     } finally {
       executing.value = false

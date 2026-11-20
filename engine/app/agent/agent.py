@@ -40,6 +40,16 @@ _RULES = (
     (("额度", "充值", "没钱", "费用"), "route_to_recharge", 0.0, "去充值额度"),
     (("设置", "配置模型"), "route_to_settings", 0.0, "打开模型设置"),
 )
+def _looks_like_creation_request(text: str) -> bool:
+    """兜底识别：用户直接给内容规格（数字+集/岁）要求写剧本，但没有显式动词。
+    只在所有明确规则都没命中时才调用，避免抢走"第二集太快了""每集换脸"这类修改诉求。
+    """
+    import re
+    # "100集""3集短剧""100岁""从1岁到100岁""改成三集" 等数字+量词规格
+    has_spec = bool(re.search(r"\d+\s*(集|岁|部)|[一二三四五六七八九十]+\s*(集|岁|部)", text))
+    # 修改/查询类信号：这些不该被识别成"新建剧本"
+    modify_signals = ("太快", "太慢", "换脸", "改脸", "不像", "铺垫", "节奏", "重新拆分", "导出", "进度")
+    return has_spec and not any(s in text for s in modify_signals)
 class ConversationAgent:
     def __init__(self, llm_caller=None):
         self.llm_caller = llm_caller
@@ -47,6 +57,9 @@ class ConversationAgent:
         for keys, op, _, _ in _RULES:
             if any(k in text for k in keys):
                 return op
+        # 兜底：显式规则没命中，但用户给了创作规格 → 视为写剧本
+        if _looks_like_creation_request(text):
+            return "gen_script"
         return "answer_question"
     async def rewrite(self, text: str, project_id: str | None = None) -> Intent:
         """把用户口语改写为带成本影响的结构意图；不执行任何写操作。"""

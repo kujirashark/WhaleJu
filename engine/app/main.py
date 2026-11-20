@@ -298,12 +298,19 @@ async def chat_stream(req: ChatReq):
     """
     intent = await AGENT.rewrite(req.message, req.project_id)
     async def events():
-        # token 事件：白话逐字回显（规则模式下整段一句，生产由 LLM token 流替换）
-        reply = intent.confirm or "我记下了，先按现在的方案继续。"
+        # 问答类（如"你好""这剧讲啥"）没有可执行动作，不该弹确认条；
+        # 给一句人话回答，并标记 needs_confirm=False，前端就不显示"确认执行"。
+        needs_confirm = intent.op != "answer_question"
+        if intent.op == "answer_question":
+            reply = "我可以帮你写剧本、定妆图、拆镜头、生成画面或导出成片。直接说想做什么，例如「写三集剧本」。"
+        else:
+            reply = intent.confirm or "确认执行这一步吗？"
         for i in range(0, len(reply), 6):
             yield f"event: token\ndata: {json.dumps({'t': reply[i:i+6]}, ensure_ascii=False)}\n\n"
             await asyncio.sleep(0.02)
-        yield f"event: intent\ndata: {json.dumps(intent.to_dict(), ensure_ascii=False)}\n\n"
+        payload = intent.to_dict()
+        payload["needs_confirm"] = needs_confirm
+        yield f"event: intent\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
         yield f"event: done\ndata: {json.dumps({'history_cursor': ulid()}, ensure_ascii=False)}\n\n"
     return StreamingResponse(events(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
