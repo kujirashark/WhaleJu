@@ -25,6 +25,13 @@ const crumb = computed(() => {
 })
 function go(path: string) {
   ui.closeAll()
+  // 「制作」导航必须带上当前项目真实 ID，跳 /p/current 会让 currentId 丢失、
+  // 生成/对话全部报「没有当前项目」。没有项目时回首页。
+  if (path === '/p/current') {
+    if (project.currentId) router.push(`/p/${project.currentId}`)
+    else router.push('/')
+    return
+  }
   router.push(path)
 }
 async function confirmPay() {

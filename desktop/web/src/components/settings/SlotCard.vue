@@ -20,6 +20,11 @@ async function onTest() {
 }
 const isLocal = computed(() => choice.value === 'local')
 const needKey = computed(() => choice.value !== 'local')
+// 密钥已保存到本机时显示掩码（服务端只返回 has_credential，绝不回显明文）
+const hasSavedKey = computed(() => !!server.value.has_credential)
+const keyPlaceholder = computed(() =>
+  hasSavedKey.value ? '••••••••  已保存，留空即沿用' : '首次配置请粘贴密钥'
+)
 </script>
 <template>
   <div class="grp">
@@ -43,8 +48,8 @@ const needKey = computed(() => choice.value !== 'local')
           <input v-model="draft.model" type="text" placeholder="如 deepseek-chat / MiniMax-Text-01" :aria-label="`${title} 模型标识`">
         </label>
         <label class="cf" v-if="needKey">
-          <span>API 密钥</span>
-          <input v-model="draft.credential" type="password" placeholder="留空则沿用已保存的密钥；首次配置请粘贴" :aria-label="`${title} API 密钥`">
+          <span>API 密钥 <em v-if="hasSavedKey" style="color:var(--ink3);font-style:normal">已保存 ••••</em></span>
+          <input v-model="draft.credential" type="password" :placeholder="keyPlaceholder" :aria-label="`${title} API 密钥`">
         </label>
         <div class="cf-row">
           <button class="btn btn-s" :disabled="settings.probing[id]" @click="settings.saveOne(id); ui.toast('配置已保存到本机')">保存</button>

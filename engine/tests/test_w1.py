@@ -131,6 +131,33 @@ def test_model_test_with_config_returns_verified(monkeypatch):
     cap = client.get("/api/capabilities", headers=HEADERS).json()
     assert cap["ready"]["text"] is True
     assert REGISTRY.has_ability("text") is True
+def test_resave_unchanged_config_keeps_verified(monkeypatch):
+    """重开设置页点保存（配置未变）不能把 verified 清掉——否则生成立刻报 E4001。"""
+    import engine.app.main as main_mod
+    from engine.app.adapters.base import ProbeResult
+    async def fake_probe(self):
+        return ProbeResult(ok=True, abilities=(self.meta.abilities[0],))
+    monkeypatch.setattr(main_mod.ConfiguredProvider, "probe", fake_probe)
+    client = TestClient(app)
+    payload = {
+        "source": "owned", "provider_kind": "openai_compat", "name": "stub",
+        "endpoint": "https://example.invalid/v1", "model": "stub-model",
+        "credential": "sk-test-1234567890",
+    }
+    client.put("/api/model-configs/speech", json=payload, headers=HEADERS)
+    assert client.post("/api/model-configs/speech/test", headers=HEADERS).json()["ok"] is True
+    assert client.get("/api/model-configs", headers=HEADERS).json()["slots"]["speech"]["verified"] is True
+    # 完全相同的配置再保存一次（密钥留空沿用）
+    r = client.put("/api/model-configs/speech", json={**payload, "credential": None}, headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert r.json()["slot"]["verified"] is True
+    assert r.json()["slot"]["has_credential"] is True
+    # 改了模型标识 → 必须重新验证
+    r = client.put("/api/model-configs/speech", json={
+        **payload, "model": "new-model", "credential": None,
+    }, headers=HEADERS)
+    assert r.json()["slot"]["verified"] is False
+    assert r.json()["slot"]["model"] == "new-model"
 def test_generation_self_heals_stale_registry(monkeypatch):
     """注册表内存态被清空但库里已有 verified 配置时，生成端点必须自愈，不能误报 E4001。"""
     import engine.app.main as main_mod

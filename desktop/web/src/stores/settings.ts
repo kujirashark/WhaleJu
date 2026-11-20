@@ -43,13 +43,21 @@ export const useSettingsStore = defineStore('settings', () => {
     if (r?.slots) {
       serverSlots.value = r.slots
       for (const [slot, info] of Object.entries(r.slots)) {
-        const s = (info as any).source
+        const i = info as any
+        const s = i.source
         // 只在服务端确实有配置时回写；不覆盖用户此刻正在点选的来源
         if (s === 'owned') slots.value[slot] = 'key'
         else if (s === 'local') slots.value[slot] = 'local'
         else if (s === 'proxy') slots.value[slot] = 'plat'
         // 回写草稿来源：刷新页面后再次保存不能把已有 local/proxy 配置覆盖成默认 owned
-        if (s === 'owned' || s === 'local' || s === 'proxy') drafts.value[slot].source = s
+        if (s === 'owned' || s === 'local' || s === 'proxy') {
+          drafts.value[slot].source = s
+          // 完整回填已保存配置：否则重开设置页输入框是空的，看起来像没保存
+          if (i.endpoint) drafts.value[slot].endpoint = i.endpoint
+          if (i.model) drafts.value[slot].model = i.model
+          // 密钥不回显明文；用占位掩码提示"已保存"，用户留空即沿用
+          drafts.value[slot].credential = ''
+        }
       }
     }
   }

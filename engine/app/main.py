@@ -106,14 +106,18 @@ def _public_slot(slot: str) -> dict:
     if not row:
         return {
             "source": None, "provider_kind": None, "name": None, "model": None,
-            "endpoint": None, "status": "unset", "verified": False, "last_probe_at": None,
+            "endpoint": None, "status": "unset", "verified": False,
+            "has_credential": False, "last_probe_at": None,
         }
     verified = bool(row["verified"])
     return {
         "source": row["source"], "provider_kind": row["provider_kind"],
         "name": row["name"], "model": row["model"], "endpoint": row["endpoint"],
         "status": "verified" if verified else "unverified",
-        "verified": verified, "last_probe_at": row["updated_at"],
+        "verified": verified,
+        # 只回传"是否存过密钥"，前端据此显示 ****，绝不回传明文或密文
+        "has_credential": bool(row["credential_cipher"]),
+        "last_probe_at": row["updated_at"],
     }
 @app.get("/health")
 def health():
@@ -327,20 +331,36 @@ def save_model_config(slot: str, req: SaveModelReq):
     with DB.tx() as c:
         # 只改地址/模型、密钥留空时沿用原密文——否则用户改错地址后必须重填密钥才能保存。
         prev = c.execute(
-            "SELECT source, credential_cipher FROM model_configs WHERE slot=? AND is_active=1", (slot,)
+            "SELECT * FROM model_configs WHERE slot=? AND is_active=1", (slot,)
         ).fetchone()
         has_prev_key = bool(prev and prev["credential_cipher"])
         if req.source in ("owned", "proxy") and not req.credential and not has_prev_key:
             raise HTTPException(400, "这个来源需要填写 API 密钥")
         cipher = encrypt(req.credential) if req.credential else (prev["credential_cipher"] if has_prev_key else None)
-        c.execute("UPDATE model_configs SET is_active=0 WHERE slot=?", (slot,))
-        c.execute(
-            """INSERT INTO model_configs
-               (id,slot,source,provider_kind,name,endpoint,model,credential_cipher,abilities,verified,is_active)
-               VALUES(?,?,?,?,?,?,?,?,?,0,1)""",
-            (ulid(), slot, req.source, req.provider_kind, req.name, req.endpoint,
-             req.model, cipher, dumps([slot])),
+        # 配置实质未变（地址/模型/来源/密钥都相同）时，直接沿用原 verified，
+        # 不再新建 unverified 行——否则用户仅重开设置页点保存，就把已测通的能力清成不可用。
+        unchanged = bool(
+            prev
+            and prev["endpoint"] == req.endpoint
+            and prev["model"] == req.model
+            and prev["source"] == req.source
+            and (not req.credential or cipher == prev["credential_cipher"])
         )
+        if unchanged and prev["verified"]:
+            c.execute(
+                "UPDATE model_configs SET name=?, provider_kind=?, abilities=? WHERE id=?",
+                (req.name, req.provider_kind, dumps([slot]), prev["id"]),
+            )
+        else:
+            new_verified = 1 if unchanged else 0  # 未变则保留（含原本未验证），变了必须重测
+            c.execute("UPDATE model_configs SET is_active=0 WHERE slot=?", (slot,))
+            c.execute(
+                """INSERT INTO model_configs
+                   (id,slot,source,provider_kind,name,endpoint,model,credential_cipher,abilities,verified,is_active)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,1)""",
+                (ulid(), slot, req.source, req.provider_kind, req.name, req.endpoint,
+                 req.model, cipher, dumps([slot]), new_verified),
+            )
     refresh_providers()
     return {"saved": True, "slot": _public_slot(slot)}
 @app.post("/api/model-configs/{slot}/test", dependencies=[Depends(auth)])

@@ -21,7 +21,8 @@ async function create() {
   const ok = await project.create(v)
   if (ok) {
     project.goto(0)
-    router.push('/p/current')
+    // 跳真实项目 ID：/p/current 是占位路由，会让 WorkbenchView 拿不到 currentId
+    router.push(`/p/${project.currentId}`)
     ui.toast('项目已保存到本机，开始写第一稿')
   } else {
     ui.toast('未能创建项目：本地引擎未连接或未响应，请确认桌面应用已启动')
