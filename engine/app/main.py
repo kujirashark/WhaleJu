@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from .adapters.base import VideoGenRequest
 from .adapters.registry import ProviderRegistry
@@ -46,6 +46,41 @@ def ensure_providers(ability: str) -> bool:
         return True
     refresh_providers()
     return REGISTRY.has_ability(ability)
+def advance_status(pid: str, event: str, ctx: dict | None = None, skip: bool = False) -> str | None:
+    """把项目推过业务状态机的下一个节点，并落库到 projects.status。
+    业务闭环的关键：状态机原本只有 steps/{step}/advance 端点会调用，
+    而前端从不调用它 —— 结果 status 永远停在 DRAFT，首页进度、检查点、
+    恢复逻辑全是死的。这里让每个真实业务动作顺手推进自己的节点，
+    保证「做到哪一步」与引擎状态永远一致。
+    """
+    p = DB.get("projects", pid)
+    if not p:
+        return None
+    try:
+        nxt, _effects = WORKFLOW.advance(p["status"], event, ctx or {}, skip=skip)
+    except GuardError:
+        return None
+    DB.execute("UPDATE projects SET status=? WHERE id=?", (nxt, pid))
+    return nxt
+def sync_status(pid: str, p: dict, role_count: int = 0) -> str:
+    """状态自愈：库里已有真实产物、但 status 还停在早期节点时（例如旧版本生成的数据），
+    自动对齐到与产物一致的节点，避免用户点「确认」被守卫挡住、流程卡死。"""
+    st = p.get("status") or "DRAFT"
+    if st == "DRAFT" and p.get("script_json"):
+        st = advance_status(pid, "script_ready") or st
+    if st == "CHARACT" and role_count >= 1:
+        st = advance_status(pid, "roles_ready",
+                            {"role_count": role_count, "candidate_count": role_count}) or st
+    return st
+def _asset_url(local_path: str | None, asset_id: str | None) -> str | None:
+    """素材可访问地址：厂商 URL 直接用；本机文件走引擎的只读文件端点。"""
+    if not local_path:
+        return None
+    if local_path.startswith("http://") or local_path.startswith("https://"):
+        return local_path
+    if not asset_id:
+        return None
+    return f"/api/assets/{asset_id}/file?token={LOCAL_TOKEN}"
 # 本地鉴权 Token：优先使用桌面壳通过 IPC 注入的随机令牌；
 # 独立运行时自动生成，重启轮换（防本机其他进程调用）。
 # 任何情况下都不通过公开接口下发——Tauri 侧由 start_engine 直接返回。
@@ -173,11 +208,23 @@ def get_project(pid: str):
     for ch in chars:
         refs = loads(ch.get("ref_images"), [])
         ch["ref_url"] = refs[0].get("url") if refs else None
+    # 真实素材：第 7 步「看成片」必须读引擎里的真实产物，
+    # 否则刷新页面后前端内存态清空，用户看到空白的第 7 步。
+    assets = DB.list(
+        "SELECT id,kind,local_path,size_bytes,created_at FROM assets "
+        "WHERE project_id=? AND kind<>'work' ORDER BY created_at",
+        (pid,),
+    )
+    for a in assets:
+        a["url"] = _asset_url(a.get("local_path"), a.get("id"))
+    status = sync_status(pid, p, len(chars))
     return {
         **p,
+        "status": status,
         "script": script,
         "shots": shots,
         "characters": chars,
+        "assets": assets,
         "resume_hint": f"当前状态：{p['status']}",
         "credits_frozen": LEDGER.wallet()["frozen"],
     }
@@ -191,7 +238,9 @@ async def generate_script(pid: str, req: ScriptGenReq = ScriptGenReq()):
         raise HTTPException(404, "项目不存在")
     ensure_providers("text")
     try:
-        return await CONTENT.generate_script(pid, p["idea_text"], req.version)
+        result = await CONTENT.generate_script(pid, p["idea_text"], req.version)
+        advance_status(pid, "script_ready")   # DRAFT → CP1_PENDING（等你确认剧本）
+        return result
     except NoProviderError as exc:
         raw = str(exc)
         is_quota = "quota" in raw.lower() or "429" in raw or "rate" in raw.lower()
@@ -215,6 +264,7 @@ async def generate_script_stream(pid: str, req: ScriptGenReq = ScriptGenReq()):
                 if kind == "token":
                     yield "event: token\ndata: " + json.dumps({"t": value}, ensure_ascii=False) + "\n\n"
                 else:
+                    advance_status(pid, "script_ready")   # 剧本落库后同步推进到「等你确认剧本」
                     yield "event: done\ndata: " + json.dumps(value, ensure_ascii=False) + "\n\n"
         except NoProviderError as exc:
             raw = str(exc)
@@ -238,6 +288,8 @@ async def generate_characters(pid: str, req: CharactersGenReq = CharactersGenReq
     ensure_providers("image")
     try:
         chars = await CONTENT.generate_characters(pid, req.count)
+        advance_status(pid, "roles_ready",
+                       {"role_count": len(chars), "candidate_count": len(chars)})  # CHARACT → CP2_PENDING
         return {"items": chars}
     except NoProviderError as exc:
         raise HTTPException(400, {"code": exc.code, "message": str(exc), "hint": "到设置里配置图片模型并测试连接"})
@@ -261,6 +313,10 @@ def advance(pid: str, step: int, req: AdvanceReq):
     p = DB.get("projects", pid)
     if not p:
         raise HTTPException(404, "项目不存在")
+    # 先自愈：库里产物已领先于 status 时（旧数据），先对齐再推进
+    role_count = len(DB.list("SELECT id FROM characters WHERE project_id=?", (pid,)))
+    p = dict(p)
+    p["status"] = sync_status(pid, p, role_count)
     event_map = {1: "script_ready", 2: "approve", 4: "approve", 6: "all_done", 7: "approve", 8: "export_done"}
     event = "reject" if req.action == "reject" else event_map.get(step, "approve")
     ctx = dict(req.payload)
@@ -363,9 +419,30 @@ async def export_project(pid: str, req: ExportReq):
     })
     DB.execute("UPDATE projects SET status='DELIVER' WHERE id=?", (pid,))
     return result
+@app.get("/api/assets/{asset_id}/file")
+def asset_file(asset_id: str, token: str | None = None):
+    """素材只读文件端点：第 7 步要用 <img src> 展示真实画面，
+    无法携带自定义请求头，因此这里用查询参数校验本地令牌。"""
+    if token != LOCAL_TOKEN:
+        raise HTTPException(401, "令牌无效")
+    a = DB.get("assets", asset_id)
+    if not a or not a.get("local_path"):
+        raise HTTPException(404, "素材不存在")
+    ref = a["local_path"]
+    if ref.startswith("http://") or ref.startswith("https://"):
+        raise HTTPException(409, "该素材是远端地址，请直接打开厂商链接")
+    p = Path(ref)
+    if not p.exists():
+        raise HTTPException(404, "素材文件已被移动或删除")
+    return FileResponse(p)
 @app.get("/api/works", dependencies=[Depends(auth)])
 def list_works():
-    return {"items": DB.list("SELECT * FROM assets WHERE kind='work' ORDER BY created_at DESC")}
+    """作品库：带上项目名与集数，用户才认得出这是哪部剧的哪一集。"""
+    items = DB.list("SELECT * FROM assets WHERE kind='work' ORDER BY created_at DESC")
+    for it in items:
+        p = DB.get("projects", it.get("project_id"))
+        it["project_name"] = p["name"] if p else "未命名项目"
+    return {"items": items}
 @app.get("/api/works/{work_id}/caption", dependencies=[Depends(auth)])
 def work_caption(work_id: str, body: str = ""):
     work = DB.get("assets", work_id)
@@ -499,6 +576,8 @@ async def generation_start(pid: str, req: GenStartReq = GenStartReq()):
             "balance": wallet["balance"],
         })
     batch = await GENERATIONS.start(pid, req.shot_count)
+    advance_status(pid, "budget_confirmed",
+                   {"available": wallet["balance"], "required": PRICE_PER_SHOT_ESTIMATE * req.shot_count})
     return {"batch_id": batch.id, "queued": req.shot_count,
             "route_reason": "按镜头重要性自动分配：重要镜头优先自带模型，过渡镜头走平台额度"}
 PRICE_PER_SHOT_ESTIMATE = 9.0
@@ -523,6 +602,9 @@ async def generation_progress(pid: str):
         return {"batch_id": None, "done": 0, "total": 0, "running": 0, "failed": 0,
                 "queued": 0, "paused": False, "eta_s": None,
                 "failed_items": [], "items": [], "not_started": True}
+    # 全部镜头完成 → RUNNING → CP3_PENDING（等你看成片确认）
+    if r.get("total") and r.get("done", 0) >= r.get("total", 0) and not r.get("paused"):
+        advance_status(pid, "all_done")
     return r
 @app.post("/api/generation/submit", dependencies=[Depends(auth)])
 async def generation_submit(req: GenReq):

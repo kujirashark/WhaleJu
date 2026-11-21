@@ -170,6 +170,16 @@ class GenerationManager:
                 "ability": "video", "units": 5.0, "credits_spent": item.cost,
                 "raw_cost_estimate": item.cost, "ok": 1,
             })
+            # 素材落库：批次只存在于内存，刷新页面后第 7 步会看不到任何画面。
+            # 这里把真实产物登记进 assets，项目详情就能按项目读回真实素材。
+            if item.asset_ref:
+                try:
+                    self.db.insert("assets", {
+                        "id": ulid(), "project_id": batch.project_id, "kind": "shot",
+                        "local_path": item.asset_ref, "sha256": "pending", "size_bytes": 0,
+                    })
+                except Exception:  # noqa: BLE001 - 登记失败不影响已完成的生成
+                    pass
             return True
         except Exception as exc:  # noqa: BLE001 - 任何 Provider 异常都退回冻结
             reason = str(exc)[:60] or "provider_error"

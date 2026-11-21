@@ -35,7 +35,7 @@ function openWorksFolder() {
         <WorkCard
           v-for="w in works" :key="w.id"
           :workId="w.id"
-          title="本机成片"
+          :title="w.project_name || '本机成片'"
           :meta="`${size(w.size_bytes || 0)} · ${new Date(w.created_at).toLocaleString('zh-CN')} 导出`"
           episode="成片"
         />

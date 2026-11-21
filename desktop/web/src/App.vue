@@ -39,11 +39,14 @@ async function confirmPay() {
   ui.payOpen = false
   ui.toast(amount ? `额度已到账，本地账本已更新 +${Math.round(amount)}` : '支付未完成，本地引擎未响应')
 }
-function lockRoles() {
+async function lockRoles() {
+  ui.lockOpen = false
+  // 第 4 步确认：交给引擎状态机推进（CP2_PENDING → PLANNED），前端只跟进结果
+  const ok = await project.confirmStep(4, { selected: [...project.selectedRoles] })
+  if (!ok) return
   project.locked = true
   project.goto(4)
-  ui.lockOpen = false
-  ui.toast(`${project.selectedRoles.size} 个形象已确认，正在拆分镜头`)
+  ui.toast(`${project.selectedRoles.size} 个形象已确认，去第 5 步拆分镜头`)
 }
 async function openFolder(kind: 'data' | 'works') {
   ui.userMenuOpen = false

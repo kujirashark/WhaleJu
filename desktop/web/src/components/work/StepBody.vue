@@ -13,7 +13,13 @@ const step = computed(() => project.step)
 const done = computed(() => gen.done)
 const script = computed(() => project.script)
 const shots = computed(() => project.shots)
-const firstAsset = computed(() => gen.items.find((i: any) => i.status === 'done' && i.asset_ref)?.asset_ref || null)
+const firstAsset = computed(() => {
+  // 优先用引擎里落库的素材（刷新后仍在），其次用本批次内存态
+  const persisted = project.assets.find((a: any) => a.url)
+  if (persisted) return persisted.url.startsWith('http') ? persisted.url : engine.base + persisted.url
+  const live = gen.items.find((i: any) => i.status === 'done' && i.asset_ref)
+  return live?.asset_ref || null
+})
 /** 第 1 步单一状态：任何时刻只呈现一种状态的信息，避免空态/忙碌/失败文案同屏打架。 */
 const scriptState = computed<'empty' | 'busy' | 'error' | 'done'>(() => {
   if (script.value?.episodes?.length) return 'done'
@@ -27,6 +33,10 @@ const scriptPill = computed(() => ({
   error: { text: '生成失败', cls: 'p-err' },
   empty: { text: '待生成', cls: 'p-off' },
 }[scriptState.value]))
+/** 是否有真实素材可导出（第 8 步前置条件） */
+const hasMaterial = computed(() =>
+  project.assets.length > 0 || gen.items.some((i: any) => i.status === 'done' && i.asset_ref),
+)
 function window_open(url: string) { window.open(url, '_blank', 'noopener,noreferrer') }
 onMounted(() => project.loadDetail())
 async function doGenScript() {
@@ -44,6 +54,13 @@ function confirmRoles() {
   project.goto(3)
   ui.toast('已确认角色，下一步拆分镜头')
 }
+/** 第 2 步确认剧本：先推进引擎状态机（CP1_PENDING → CHARACT），再进下一步。 */
+async function doConfirmOutline() {
+  const ok = await project.confirmStep(2)
+  if (!ok) return
+  project.goto(2)
+  ui.toast('剧本已确认，下一步定角色')
+}
 async function startGen() {
   const r = await gen.start(project.currentId || '', 12)
   if (r.ok) { project.goto(5); ui.toast(`已开始真实生成：${gen.routeReason || '按重要性分配'}`) }
@@ -53,11 +70,19 @@ async function doExport() {
   const work = await project.exportWork()
   if (work) {
     project.exp = { state: 'done', pct: 100 }
+    await project.loadDetail()          // 同步最新状态（导出后项目进入已完成）
     ui.toast('成片已存入本机作品库（AI 标识已自动写入）')
   } else {
     project.exp = { state: 'idle', pct: 0 }
     ui.toast(engine.error || '导出失败：请确认已完成真实生成')
   }
+}
+/** 第 7 步确认这一版：推进引擎状态（CP3_PENDING → DELIVER），再进导出。 */
+async function doConfirmPreview() {
+  const ok = await project.confirmStep(7)
+  if (!ok) return
+  project.goto(7)
+  ui.toast('这一版已确认，去第 8 步导出')
 }
 </script>
 <template>
@@ -114,9 +139,9 @@ async function doExport() {
           </div>
         </div>
       </template>
-      <!-- 第 2 步 -->
+      <!-- 第 2 步：只有引擎还停在这一步时才有确认动作 -->
       <template v-else-if="step === 1">
-        <div class="card-hd">第 2 步 · 确认剧本<span class="pill p-wait">等你确认</span></div>
+        <div class="card-hd">第 2 步 · 确认剧本<span class="pill" :class="project.status === 'CP1_PENDING' ? 'p-wait' : 'p-ok'">{{ project.status === 'CP1_PENDING' ? '等你确认' : '已确认' }}</span></div>
         <div class="card-bd">
           <p>看看故事走向对不对。内容是刚生成的真实剧本。</p>
           <div v-if="script?.episodes?.length" style="margin-top:10px">
@@ -127,7 +152,8 @@ async function doExport() {
           </div>
           <div v-else class="hint-warn">还没有剧本，请先回到第 1 步生成。</div>
           <div class="acts">
-            <button class="btn btn-p" :disabled="!script?.episodes?.length" @click="project.goto(2)">确认剧本，开始定角色</button>
+            <button v-if="project.status === 'CP1_PENDING'" class="btn btn-p" :disabled="!script?.episodes?.length" @click="doConfirmOutline">确认剧本，开始定角色</button>
+            <button v-else class="btn btn-p" @click="project.goto(2)">剧本已确认，继续定角色</button>
             <button class="btn btn-s" @click="project.goto(0)">回去改剧本</button>
           </div>
         </div>
@@ -165,18 +191,19 @@ async function doExport() {
       </template>
       <!-- 第 4 步 -->
       <template v-else-if="step === 3">
-        <div class="card-hd">第 4 步 · 确认角色形象<span class="pill" :class="project.locked ? 'p-ok' : 'p-wait'">{{ project.locked ? '已确认' : '等你确认' }}</span></div>
+        <div class="card-hd">第 4 步 · 确认角色形象<span class="pill" :class="project.status === 'CP2_PENDING' ? 'p-wait' : 'p-ok'">{{ project.status === 'CP2_PENDING' ? '等你确认' : '已确认' }}</span></div>
         <div class="card-bd">
           <p>这 {{ project.selectedRoles.size }} 个形象会固定在镜头里。现在是：</p>
           <div class="rolegrid" style="margin-top:10px">
             <div v-for="r in project.characters.filter((c:any) => project.selectedRoles.has(c.id))" :key="r.id" class="role">
               <img v-if="r.ref_url" :src="r.ref_url" :alt="r.name"><div v-else class="role-ph">无图</div>
-              <span class="lab">{{ r.name }}{{ project.locked ? ' · 已确认' : '' }}</span>
+              <span class="lab">{{ r.name }}{{ project.status !== 'CP2_PENDING' ? ' · 已确认' : '' }}</span>
             </div>
           </div>
           <div v-if="!project.selectedRoles.size" class="hint-warn">还没有选中的角色，请先回第 3 步生成并选择。</div>
           <div class="acts">
-            <button class="btn btn-p" :disabled="project.locked || !project.selectedRoles.size" @click="ui.lockOpen = true">{{ project.locked ? '已确认' : '确认形象，开始拆镜头' }}</button>
+            <button v-if="project.status === 'CP2_PENDING'" class="btn btn-p" :disabled="!project.selectedRoles.size" @click="ui.lockOpen = true">确认形象，开始拆镜头</button>
+            <button v-else class="btn btn-p" @click="project.goto(4)">形象已确认，去拆镜头</button>
             <button class="btn btn-s" @click="project.goto(2)">回去调整形象</button>
           </div>
           <div class="note w">确认后想换形象，需要把已经做好的镜头重新生成一遍。建议先确认再继续。</div>
@@ -254,25 +281,27 @@ async function doExport() {
           <div class="note">关掉窗口不会丢进度，下次打开从这一格继续。没有"跳过等待"——真实任务无法伪造完成。</div>
         </div>
       </template>
-      <!-- 第 7 步 -->
+      <!-- 第 7 步：素材取自引擎 assets（刷新后仍在），不是内存态 -->
       <template v-else-if="step === 6">
-        <div class="card-hd">第 7 步 · 看成片<span class="pill p-info">真实素材</span></div>
+        <div class="card-hd">第 7 步 · 看成片<span class="pill p-info">{{ project.assets.length }} 段素材</span></div>
         <div class="card-bd">
           <template v-if="firstAsset">
-            <p>这是模型真实生成的画面。点开查看，不满意可回对应镜头重新生成。</p>
+            <p>这是模型真实生成的画面。点开查看，不满意可回第 6 步重新生成对应镜头。</p>
             <div class="player" style="margin-top:14px">
               <img :src="firstAsset" alt="生成的真实画面">
             </div>
             <div class="acts" style="justify-content:center">
               <button class="btn btn-s" @click="window_open(firstAsset)">在新窗口查看</button>
-              <button class="btn btn-p" @click="project.goto(7)">导出整集</button>
+              <button class="btn btn-s" @click="project.goto(5)">回第 6 步重做镜头</button>
+              <button v-if="project.status === 'CP3_PENDING'" class="btn btn-p" @click="doConfirmPreview">确认这一版，导出整集</button>
+              <button v-else class="btn btn-p" @click="project.goto(7)">这一版已确认，去导出</button>
             </div>
             <div class="note">画面来自你配置的视频模型；没有真实素材时不会显示任何示例画面。</div>
           </template>
           <template v-else>
             <p>还没有真实画面。需要先在第 6 步完成生成，模型返回素材后这里才会显示。</p>
             <div class="acts" style="justify-content:center">
-              <button class="btn btn-p" @click="project.goto(4)">去生成画面</button>
+              <button class="btn btn-p" @click="project.goto(5)">去生成画面</button>
             </div>
             <div class="note">这里不会用示例剧照冒充成片。</div>
           </template>
@@ -283,13 +312,16 @@ async function doExport() {
         <div class="card-hd">第 8 步 · 导出视频<span class="pill" :class="project.exp.state === 'done' ? 'p-ok' : 'p-off'">{{ project.exp.state === 'done' ? '已导出' : project.exp.state === 'running' ? '导出中' : '未开始' }}</span></div>
         <div class="card-bd">
           <p>导出设置好就可以发。默认竖屏，带字幕和 AI 生成标识。</p>
+          <div v-if="!hasMaterial" class="hint-warn" style="margin-top:12px">
+            还没有真实画面可导出。完成第 6 步生成后，这里才能导出成片。
+          </div>
           <div style="margin-top:12px;display:flex;flex-direction:column;gap:7px">
             <div class="ch" :class="{ sel: project.ratio === 'v' }" @click="project.ratio = 'v'"><span class="rad"></span><div><div class="t">竖屏 1080 × 1920</div><div class="d">适合抖音、视频号</div></div><span class="pr">MP4</span></div>
             <div class="ch" :class="{ sel: project.ratio === 'h' }" @click="project.ratio = 'h'"><span class="rad"></span><div><div class="t">横屏 1920 × 1080</div><div class="d">适合 B 站、YouTube</div></div><span class="pr">MP4</span></div>
           </div>
           <div v-if="project.exp.state === 'running'" class="progress solid" style="margin-top:16px"><i :style="{ width: `${project.exp.pct}%` }"></i></div>
           <div class="acts">
-            <button v-if="project.exp.state === 'idle'" class="btn btn-p" @click="doExport">开始导出</button>
+            <button v-if="project.exp.state === 'idle'" class="btn btn-p" :disabled="!hasMaterial" @click="doExport">开始导出</button>
             <template v-if="project.exp.state === 'done'">
               <button class="btn btn-p" @click="engine.openFolder('works'); ui.toast('已打开作品库文件夹')">下载视频</button>
               <button class="btn btn-s" @click="router.push('/works')">去作品库</button>

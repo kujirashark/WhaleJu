@@ -1,11 +1,13 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { engine } from '@/api/engine'
+import { useUiStore } from './ui'
 /** 项目与制作流程：状态、步骤、角色选择、生成/播放/导出。
  *  守卫在引擎，前端的 step 只用于界面呈现；所有内容来自引擎真实数据。 */
 export const useProjectStore = defineStore('project', () => {
   const currentId = ref<string | null>(null)
-  const step = ref(3)
+  const step = ref(0)
+  let stepTouched = false   // 用户是否主动选过步骤（用于区分"跟随状态"与"用户选择"）
   const tab = ref<'shots' | 'roles' | 'cost'>('shots')
   const scriptVer = ref(1)
   const selectedRoles = ref<Set<string>>(new Set(['child', 'teen', 'adult', 'mid', 'old']))
@@ -22,6 +24,14 @@ export const useProjectStore = defineStore('project', () => {
   const contentBusy = ref(false)
   const contentError = ref('')
   const streamText = ref('')  // 生成过程实时文本（流式 token 累积）
+  const status = ref('DRAFT') // 引擎业务状态（DRAFT→…→DELIVER），是流程进度的唯一事实来源
+  const assets = ref<any[]>([]) // 引擎里已产出的真实素材（画面/成片）
+  /** 引擎状态 → 允许到达的最远步骤。前进必须按顺序，越界会被拦下。 */
+  const STEP_MAX_BY_STATUS: Record<string, number> = {
+    DRAFT: 0, CP1_PENDING: 1, CHARACT: 2, CP2_PENDING: 3,
+    PLANNED: 4, RUNNING: 5, CP3_PENDING: 6, DELIVER: 7,
+  }
+  const maxStep = computed(() => STEP_MAX_BY_STATUS[status.value] ?? 0)
   /** 流式生成剧本：读取 SSE 逐块更新 streamText，完成后落库结果写入 script。 */
   async function genScriptStream(version = 1): Promise<{ ok: boolean; error?: string }> {
     if (!currentId.value) return { ok: false, error: '没有当前项目' }
@@ -71,7 +81,32 @@ export const useProjectStore = defineStore('project', () => {
   }
   let playTimer: ReturnType<typeof setInterval> | undefined
   let expTimer: ReturnType<typeof setInterval> | undefined
-  function goto(i: number) { step.value = Math.max(0, Math.min(7, Number(i))) }
+  function goto(i: number): boolean {
+    const t = Math.max(0, Math.min(7, Number(i)))
+    // 步骤门禁：不能跳过前面的确认直接跳到后面
+    if (t > maxStep.value) {
+      useUiStore().toast('先完成当前这一步，再往后走')
+      return false
+    }
+    step.value = t
+    stepTouched = true
+    return true
+  }
+  /** 业务节点确认：交给引擎状态机推进，并把最新状态与素材同步回来。 */
+  async function confirmStep(stepNo: number, payload: Record<string, any> = {}): Promise<boolean> {
+    if (!currentId.value) { useUiStore().toast('还没有当前项目'); return false }
+    const r = await engine.api<{ project_status: string }>(
+      `/api/projects/${currentId.value}/steps/${stepNo}/advance`,
+      { method: 'POST', body: { action: 'approve', payload } },
+    )
+    if (r?.project_status) {
+      status.value = r.project_status
+      await loadDetail()
+      return true
+    }
+    useUiStore().toast(engine.error || '这一步暂时无法确认')
+    return false
+  }
   /** 从引擎加载项目真实内容（剧本/分镜可能为 null = 尚未生成）。 */
   async function loadDetail() {
     if (!currentId.value) return
@@ -81,6 +116,12 @@ export const useProjectStore = defineStore('project', () => {
       script.value = r.script || null
       shots.value = r.shots || null
       characters.value = r.characters || []
+      status.value = r.status || 'DRAFT'
+      assets.value = r.assets || []
+      // 步骤跟随引擎状态：打开项目就落在「当前该做的事」上，
+      // 不会因为前端残留的 step 而停在已经完成或还没解锁的步骤。
+      // 用户主动点过侧栏后（stepTouched），则尊重用户选择，不再强制拉回。
+      if (!stepTouched || step.value > maxStep.value) step.value = maxStep.value
     }
   }
   /** 真实生成定妆图（调用已配置图片模型）。 */
@@ -197,7 +238,9 @@ export const useProjectStore = defineStore('project', () => {
   return {
     currentId, step, tab, scriptVer, selectedRoles, locked, ratio, player, exp, projects,
     detail, script, shots, characters, contentBusy, contentError, streamText,
-    goto, create, loadProjects, loadDetail, remove, loadTrash, restore, genScript, genScriptStream, genShots, genCharacters, toggleRole,
+    status, assets, maxStep,
+    goto, confirmStep, create, loadProjects, loadDetail, remove, loadTrash, restore,
+    genScript, genScriptStream, genShots, genCharacters, toggleRole,
     togglePlay, startExport, exportWork,
   }
 })

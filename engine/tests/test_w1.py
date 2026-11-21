@@ -603,3 +603,34 @@ def test_script_stream_emits_tokens_and_saves(monkeypatch):
     assert "event: done" in body
     detail = client.get(f"/api/projects/{pid}", headers=HEADERS).json()
     assert detail["script"]["title"] == "流式剧"
+def test_project_status_advances_with_business_actions():
+    """业务动作必须推进项目状态机，否则首页进度/检查点/恢复逻辑全是死的。"""
+    from engine.app.main import app as engine_app
+    client = TestClient(engine_app)
+    pid = client.post("/api/projects", json={"idea": "状态机推进测试三集竖屏短剧"},
+                      headers=HEADERS).json()["id"]
+    def status():
+        return client.get(f"/api/projects/{pid}", headers=HEADERS).json()["status"]
+    assert status() == "DRAFT"
+    # 第 2 步确认剧本 → CHARACT（剧本未生成时引擎会拒绝，需先有剧本才能推进）
+    r = client.post(f"/api/projects/{pid}/steps/2/advance",
+                    json={"action": "approve", "payload": {}}, headers=HEADERS)
+    assert r.status_code == 400, "没有剧本时不该能确认"
+    assert r.json()["detail"]["code"] == "E3001"
+def test_assets_file_endpoint_requires_token():
+    """素材文件端点必须校验本地令牌，不能裸奔。"""
+    from engine.app.main import app as engine_app
+    client = TestClient(engine_app)
+    r = client.get("/api/assets/does-not-exist/file")
+    assert r.status_code == 401
+    r = client.get("/api/assets/does-not-exist/file?token=wrong")
+    assert r.status_code == 401
+def test_project_detail_exposes_assets_url():
+    """项目详情要返回素材及其可访问地址，第 7 步才有真实画面可显示。"""
+    from engine.app.main import app as engine_app
+    client = TestClient(engine_app)
+    pid = client.post("/api/projects", json={"idea": "素材地址测试三集竖屏短剧"},
+                      headers=HEADERS).json()["id"]
+    d = client.get(f"/api/projects/{pid}", headers=HEADERS).json()
+    assert "assets" in d and isinstance(d["assets"], list)
+    assert d["status"] == "DRAFT"
