@@ -634,3 +634,49 @@ def test_project_detail_exposes_assets_url():
     d = client.get(f"/api/projects/{pid}", headers=HEADERS).json()
     assert "assets" in d and isinstance(d["assets"], list)
     assert d["status"] == "DRAFT"
+def test_call_log_records_provider_calls(monkeypatch):
+    """模型调用必须留下可查记录：地址、状态码、耗时、失败原因都要有。"""
+    from engine.app.adapters import call_log
+    from engine.app.adapters.configured_provider import ConfiguredProvider
+    import engine.app.adapters.configured_provider as cp_mod
+    call_log.clear()
+    class FakeResp:
+        def __init__(self, status, body):
+            self.status_code = status
+            self._body = body
+            self.text = str(body)
+        def json(self):
+            return self._body
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def post(self, *a, **kw):
+            return FakeResp(429, {"error": {"message": "rate limit"}})
+    monkeypatch.setattr(cp_mod.httpx, "Client", FakeClient)
+    monkeypatch.setattr(cp_mod.time, "sleep", lambda _s: None)
+    p = ConfiguredProvider("t", "proxy", ("text",), "https://x.invalid/v1", api_key="k", model="m")
+    status, _data, _err = p._post("/chat/completions", {})
+    assert status == 429
+    items = call_log.recent(10)
+    assert items, "失败的调用也必须记录"
+    last = items[-1]
+    assert last["status"] == 429
+    assert last["model"] == "m"
+    assert "rate limit" in last["error"]
+    assert last["endpoint"] == "https://x.invalid/v1"
+def test_calls_endpoint_returns_log():
+    """/api/calls 能查到最近的调用记录。"""
+    from engine.app.adapters import call_log
+    call_log.clear()
+    call_log.record("text", "glm-5.3", "https://x.invalid/v1", "POST", "/chat/completions",
+                    status=200, ms=120, attempt=1, note="已收到首个字符")
+    with TestClient(app) as client:
+        r = client.get("/api/calls?limit=10", headers=HEADERS)
+        assert r.status_code == 200
+        items = r.json()["items"]
+        assert len(items) >= 1
+        assert items[-1]["model"] == "glm-5.3"

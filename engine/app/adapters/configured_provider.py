@@ -16,6 +16,7 @@ from .base import (
     GenResult, ImageGenRequest, ProbeResult, ProviderMeta,
     SpeechRequest, TextGenRequest, VideoGenRequest,
 )
+from . import call_log
 class ConfiguredProvider:
     """由设置页配置构造的真实 HTTP Provider。"""
     def __init__(
@@ -50,23 +51,38 @@ class ConfiguredProvider:
     RETRY_DELAY_S = (1.0, 2.0, 4.0)  # 三次退避，总计约 7 秒
     def _post(self, path: str, payload: dict) -> tuple[int, dict | None, str]:
         """同步底层 POST（在 async 方法内用 asyncio.to_thread 调用，避免阻塞事件循环）。
-        对限流/临时故障做指数退避重试，重试耗尽才如实返回失败。"""
+        对限流/临时故障做指数退避重试，重试耗尽才如实返回失败。
+        每次尝试都登记调用日志，失败与重试同样如实记录。"""
         import time as _time
         last_status, last_err = 0, ""
         for attempt in range(len(self.RETRY_DELAY_S) + 1):
+            t0 = _time.monotonic()
             try:
                 with httpx.Client(timeout=self.timeout) as c:
                     r = c.post(self.endpoint + path, headers=self._headers(), json=payload)
+                ms = int((_time.monotonic() - t0) * 1000)
                 if r.status_code == 200:
+                    call_log.record(self._ability(), self.model, self.endpoint, "POST", path,
+                                    status=200, ms=ms, attempt=attempt + 1)
                     return 200, r.json(), ""
                 last_status, last_err = r.status_code, f"HTTP {r.status_code}: {r.text[:120]}"
+                call_log.record(self._ability(), self.model, self.endpoint, "POST", path,
+                                status=r.status_code, ms=ms, attempt=attempt + 1,
+                                error=last_err,
+                                note="限流/临时故障，将自动重试" if r.status_code in self.RETRY_STATUS else "")
                 if r.status_code not in self.RETRY_STATUS:
                     return last_status, None, last_err  # 4xx 非限流：立刻失败，不重试
             except Exception as exc:  # noqa: BLE001
                 last_status, last_err = 0, str(exc)[:160]
+                call_log.record(self._ability(), self.model, self.endpoint, "POST", path,
+                                status=0, ms=int((_time.monotonic() - t0) * 1000),
+                                attempt=attempt + 1, error=last_err, note="连接失败，将自动重试")
             if attempt < len(self.RETRY_DELAY_S):
                 _time.sleep(self.RETRY_DELAY_S[attempt])
         return last_status, None, last_err
+    def _ability(self) -> str:
+        """该 Provider 的主能力（用于日志归类）。"""
+        return self.meta.abilities[0] if self.meta.abilities else "unknown"
     async def stream_chat(
         self,
         prompt: str,
@@ -74,7 +90,10 @@ class ConfiguredProvider:
         max_tokens: int = 2048,
         temperature: float = 0.7,
     ):
-        """OpenAI 兼容流式对话：逐块 yield 文本增量。
+        """OpenAI 兼容流式对话。
+        yield 两种事件：
+        - ("delta", 文本增量) —— 模型返回的内容
+        - ("call", 调用记录) —— 每一次真实 HTTP 尝试（含重试、失败、耗时）
         厂商返回 `data: {"choices":[{"delta":{"content":"..."}}]}` 的 SSE 行，
         以 `data: [DONE]` 结束。任何失败都通过 RuntimeError 抛出，交由上层
         如实反馈，绝不伪造 token。
@@ -90,23 +109,41 @@ class ConfiguredProvider:
             "stream": True,
         }
         import json as _json
+        import time as _time
         for attempt in range(len(self.RETRY_DELAY_S) + 1):
+            t0 = _time.monotonic()
+            got_data = False
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as c:
                     async with c.stream("POST", self.endpoint + "/chat/completions",
                                         headers=self._headers(), json=payload) as r:
                         if r.status_code != 200:
                             body = (await r.aread()).decode("utf-8", "replace")[:160]
+                            call_log.record(self._ability(), self.model, self.endpoint, "POST",
+                                            "/chat/completions", status=r.status_code,
+                                            ms=int((_time.monotonic() - t0) * 1000),
+                                            attempt=attempt + 1, error=f"HTTP {r.status_code}: {body}",
+                                            note="限流/临时故障，将自动重试" if r.status_code in self.RETRY_STATUS else "")
                             if r.status_code in self.RETRY_STATUS and attempt < len(self.RETRY_DELAY_S):
                                 import asyncio as _aio
                                 await _aio.sleep(self.RETRY_DELAY_S[attempt])
                                 continue
                             raise RuntimeError(f"HTTP {r.status_code}: {body}")
+                        # 连接成功：先登记一条"已建立连接"，首字节时间后续再补
+                        yield ("call", call_log.record(
+                            self._ability(), self.model, self.endpoint, "POST", "/chat/completions",
+                            status=200, ms=int((_time.monotonic() - t0) * 1000),
+                            attempt=attempt + 1, note="流式连接已建立，等待首个字符"))
                         async for line in r.aiter_lines():
                             if not line.startswith("data:"):
                                 continue
                             data = line[5:].strip()
                             if data == "[DONE]":
+                                yield ("call", call_log.record(
+                                    self._ability(), self.model, self.endpoint, "POST",
+                                    "/chat/completions", status=200,
+                                    ms=int((_time.monotonic() - t0) * 1000),
+                                    attempt=attempt + 1, note="流式响应结束"))
                                 return
                             try:
                                 obj = _json.loads(data)
@@ -114,11 +151,21 @@ class ConfiguredProvider:
                             except (ValueError, KeyError, IndexError, TypeError):
                                 continue
                             if delta:
-                                yield delta
+                                if not got_data:
+                                    got_data = True
+                                    yield ("call", call_log.record(
+                                        self._ability(), self.model, self.endpoint, "POST",
+                                        "/chat/completions", status=200,
+                                        ms=int((_time.monotonic() - t0) * 1000),
+                                        attempt=attempt + 1, note="已收到首个字符"))
+                                yield ("delta", delta)
                         return
             except RuntimeError:
                 raise
             except Exception as exc:  # noqa: BLE001
+                call_log.record(self._ability(), self.model, self.endpoint, "POST", "/chat/completions",
+                                status=0, ms=int((_time.monotonic() - t0) * 1000),
+                                attempt=attempt + 1, error=str(exc)[:160], note="连接失败，将自动重试")
                 if attempt < len(self.RETRY_DELAY_S):
                     import asyncio as _aio
                     await _aio.sleep(self.RETRY_DELAY_S[attempt])

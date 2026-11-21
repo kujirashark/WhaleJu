@@ -68,7 +68,10 @@ class ContentGenerator:
         return self._save_script(project_id, idea, version, raw)
     async def stream_script(self, project_id: str, idea: str, version: int = 1):
         """流式生成剧本：逐块 yield 文本增量，完整结果落库后 yield 终帧。
-        yield 格式：("token", 文本片段) / ("done", payload)
+        yield 格式：
+        - ("token", 文本片段)
+        - ("call", 调用记录)  每一次真实 HTTP 尝试，界面据此显示调用日志
+        - ("done", payload)
         失败抛出 NoProviderError，由 API 层转成明确的 SSE error 事件。
         """
         provider = self._provider()
@@ -77,7 +80,15 @@ class ContentGenerator:
         system, prompt = self._script_prompt(idea)
         chunks: list[str] = []
         try:
-            async for delta in provider.stream_chat(prompt, system, max_tokens=2048):
+            async for item in provider.stream_chat(prompt, system, max_tokens=2048):
+                # 兼容两种 Provider：产出 ("delta", text)/("call", log) 的新版，
+                # 以及只 yield 纯文本的旧实现。
+                if isinstance(item, tuple) and item and item[0] == "call":
+                    yield ("call", item[1])
+                    continue
+                delta = item[1] if (isinstance(item, tuple) and item and item[0] == "delta") else item
+                if not isinstance(delta, str):
+                    continue
                 chunks.append(delta)
                 yield ("token", delta)
         except Exception as exc:  # noqa: BLE001

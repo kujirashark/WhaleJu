@@ -2,13 +2,14 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { engine } from '@/api/engine'
 import { useUiStore } from './ui'
+import { useCallsStore } from './calls'
 /** 项目与制作流程：状态、步骤、角色选择、生成/播放/导出。
  *  守卫在引擎，前端的 step 只用于界面呈现；所有内容来自引擎真实数据。 */
 export const useProjectStore = defineStore('project', () => {
   const currentId = ref<string | null>(null)
   const step = ref(0)
   let stepTouched = false   // 用户是否主动选过步骤（用于区分"跟随状态"与"用户选择"）
-  const tab = ref<'shots' | 'roles' | 'cost'>('shots')
+  const tab = ref<'shots' | 'roles' | 'cost' | 'calls'>('shots')
   const scriptVer = ref(1)
   const selectedRoles = ref<Set<string>>(new Set(['child', 'teen', 'adult', 'mid', 'old']))
   const locked = ref(false)
@@ -38,6 +39,8 @@ export const useProjectStore = defineStore('project', () => {
     contentBusy.value = true
     contentError.value = ''
     streamText.value = ''
+    const calls = useCallsStore()
+    calls.clearLive()
     try {
       const res = await fetch(`${engine.base}/api/projects/${currentId.value}/script/generate/stream`, {
         method: 'POST',
@@ -62,8 +65,17 @@ export const useProjectStore = defineStore('project', () => {
             const data = JSON.parse(raw)
             if (ev === 'stage') { /* 阶段提示由 gen-busy 展示 */ }
             else if (ev === 'token') streamText.value += data.t || ''
-            else if (ev === 'done') { script.value = data; streamText.value = ''; return { ok: true } }
-            else if (ev === 'error') {
+            else if (ev === 'call') calls.pushLive(data)   // 实时模型调用日志
+            else if (ev === 'meta') {
+              // 本次生成的结果汇总，作为日志的最后一条
+              calls.pushLive({
+                ts: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+                ability: 'text', model: '', endpoint: '', method: 'RESULT', path: '',
+                status: 200, ms: 0, attempt: 1, error: '',
+                note: `生成完成 · ${data.episodes || 0} 集 · ${data.chars || 0} 字`,
+              })
+            }
+            else if (ev === 'done') { script.value = data; streamText.value = ''; return { ok: true } }            else if (ev === 'error') {
               contentError.value = `${data.message || '生成失败'}${data.hint ? ' · ' + data.hint : ''}`
             }
           } catch { /* 忽略无法解析的块 */ }
@@ -118,6 +130,7 @@ export const useProjectStore = defineStore('project', () => {
       characters.value = r.characters || []
       status.value = r.status || 'DRAFT'
       assets.value = r.assets || []
+      if (r.script_ver) scriptVer.value = r.script_ver
       // 步骤跟随引擎状态：打开项目就落在「当前该做的事」上，
       // 不会因为前端残留的 step 而停在已经完成或还没解锁的步骤。
       // 用户主动点过侧栏后（stepTouched），则尊重用户选择，不再强制拉回。

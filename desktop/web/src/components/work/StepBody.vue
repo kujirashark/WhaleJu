@@ -4,11 +4,14 @@ import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useGenStore } from '@/stores/gen'
 import { useUiStore } from '@/stores/ui'
+import { useCallsStore } from '@/stores/calls'
 import { engine } from '@/api/engine'
+import CallLogPanel from './CallLogPanel.vue'
 const router = useRouter()
 const project = useProjectStore()
 const gen = useGenStore()
 const ui = useUiStore()
+const calls = useCallsStore()
 const step = computed(() => project.step)
 const done = computed(() => gen.done)
 const script = computed(() => project.script)
@@ -20,10 +23,12 @@ const firstAsset = computed(() => {
   const live = gen.items.find((i: any) => i.status === 'done' && i.asset_ref)
   return live?.asset_ref || null
 })
-/** 第 1 步单一状态：任何时刻只呈现一种状态的信息，避免空态/忙碌/失败文案同屏打架。 */
+/** 第 1 步单一状态：任何时刻只呈现一种状态的信息，避免空态/忙碌/失败文案同屏打架。
+ *  忙碌优先于「已有剧本」：重新生成时旧剧本还在，但界面必须显示进行中，
+ *  否则用户点「重新生成这一稿」看不到任何反应。 */
 const scriptState = computed<'empty' | 'busy' | 'error' | 'done'>(() => {
-  if (script.value?.episodes?.length) return 'done'
   if (project.contentBusy) return 'busy'
+  if (script.value?.episodes?.length) return 'done'
   if (project.contentError) return 'error'
   return 'empty'
 })
@@ -37,6 +42,8 @@ const scriptPill = computed(() => ({
 const hasMaterial = computed(() =>
   project.assets.length > 0 || gen.items.some((i: any) => i.status === 'done' && i.asset_ref),
 )
+/** 是否有可展示的模型调用日志 */
+const hasCallLog = computed(() => calls.live.length > 0)
 function window_open(url: string) { window.open(url, '_blank', 'noopener,noreferrer') }
 onMounted(() => project.loadDetail())
 async function doGenScript() {
@@ -94,49 +101,57 @@ async function doConfirmPreview() {
       <!-- 第 1 步：四种状态互斥，一次只说一件事 -->
       <template v-if="step === 0">
         <div class="card-hd">第 1 步 · 写剧本<span class="pill" :class="scriptPill.cls">{{ scriptPill.text }}</span></div>
-        <!-- 生成中：显示阶段 + 实时输出，不给无关操作 -->
-        <div v-if="scriptState === 'busy'" class="card-bd">
-          <div class="gen-live">
-            <span class="busy-dot"></span>
-            <div>
-              <div class="gen-live-t">正在写第一稿</div>
-              <div class="gen-live-s">已连接你配置的文本模型，内容会逐字出现在这里。首次生成通常需要十几秒。</div>
+        <div class="card-bd">
+          <!-- 生成中：显示阶段 + 实时输出，不给无关操作 -->
+          <template v-if="scriptState === 'busy'">
+            <div class="gen-live">
+              <span class="busy-dot"></span>
+              <div>
+                <div class="gen-live-t">正在写第一稿</div>
+                <div class="gen-live-s">已连接你配置的文本模型，内容会逐字出现在这里。首次生成通常需要十几秒。</div>
+              </div>
             </div>
-          </div>
-          <div v-if="project.streamText" class="stream-text">{{ project.streamText }}<span class="caret">▍</span></div>
-          <div v-else class="stream-placeholder">正在等待模型返回第一个字…</div>
-        </div>
-        <!-- 生成失败：说清原因 + 给出路 -->
-        <div v-else-if="scriptState === 'error'" class="card-bd">
-          <div class="state-t">没生成成功</div>
-          <div class="hint-warn">{{ project.contentError }}</div>
-          <div class="acts">
-            <button class="btn btn-p" @click="doGenScript">重新生成</button>
-            <button class="btn btn-s" @click="router.push('/settings')">检查模型配置</button>
-          </div>
-        </div>
-        <!-- 空态：一句话说明 + 一个主动作 -->
-        <div v-else-if="scriptState === 'empty'" class="card-bd">
-          <p>根据这个项目想法，用你配置的文本模型写一部 3 集竖屏短剧。</p>
-          <div class="acts">
-            <button class="btn btn-p" @click="doGenScript">用我的模型生成剧本</button>
-            <button class="btn btn-s" @click="router.push('/settings')">配置模型</button>
-          </div>
-          <div class="note">还没配置模型？先去「设置」里添加文本模型并测通，再回来生成。</div>
-        </div>
-        <!-- 已完成 -->
-        <div v-else class="card-bd">
-          <p>第一稿已写好，共 {{ script.episodes.length }} 集，已保存到本机。</p>
-          <div class="script" style="margin-top:14px">
-            <template v-for="(ep, i) in script.episodes" :key="i">
-              <p><b>第 {{ ep.idx || i + 1 }} 集 · {{ ep.title }}</b></p>
-              <p>{{ ep.script }}</p>
-            </template>
-          </div>
-          <div class="acts">
-            <button class="btn btn-p" @click="project.goto(1)">确认这一稿，看大纲</button>
-            <button class="btn btn-s" @click="doGenScript">重新生成这一稿</button>
-          </div>
+            <div v-if="project.streamText" class="stream-text">{{ project.streamText }}<span class="caret">▍</span></div>
+            <div v-else class="stream-placeholder">正在等待模型返回第一个字…</div>
+          </template>
+          <!-- 生成失败：说清原因 + 给出路 -->
+          <template v-else-if="scriptState === 'error'">
+            <div class="state-t">没生成成功</div>
+            <div class="hint-warn">{{ project.contentError }}</div>
+            <div class="acts">
+              <button class="btn btn-p" @click="doGenScript">重新生成</button>
+              <button class="btn btn-s" @click="router.push('/settings')">检查模型配置</button>
+            </div>
+          </template>
+          <!-- 空态：一句话说明 + 一个主动作 -->
+          <template v-else-if="scriptState === 'empty'">
+            <p>根据这个项目想法，用你配置的文本模型写一部 3 集竖屏短剧。</p>
+            <div class="acts">
+              <button class="btn btn-p" @click="doGenScript">用我的模型生成剧本</button>
+              <button class="btn btn-s" @click="router.push('/settings')">配置模型</button>
+            </div>
+            <div class="note">还没配置模型？先去「设置」里添加文本模型并测通，再回来生成。</div>
+          </template>
+          <!-- 已完成 -->
+          <template v-else>
+            <!-- 重新生成失败时旧剧本仍在，必须让用户看到失败原因 -->
+            <div v-if="project.contentError" class="hint-warn">{{ project.contentError }}</div>
+            <p>第一稿已写好，共 {{ script.episodes.length }} 集，已保存到本机。</p>
+            <div class="script" style="margin-top:14px">
+              <template v-for="(ep, i) in script.episodes" :key="i">
+                <p><b>第 {{ ep.idx || i + 1 }} 集 · {{ ep.title }}</b></p>
+                <p>{{ ep.script }}</p>
+              </template>
+            </div>
+            <div class="acts">
+              <button class="btn btn-p" @click="project.goto(1)">确认这一稿，看大纲</button>
+              <button class="btn btn-s" :disabled="project.contentBusy" @click="doGenScript">
+                {{ project.contentBusy ? '正在重写…' : '重新生成这一稿' }}
+              </button>
+            </div>
+          </template>
+          <!-- 模型调用日志：生成结束后依然保留，便于回看这次到底调了什么 -->
+          <CallLogPanel v-if="hasCallLog" />
         </div>
       </template>
       <!-- 第 2 步：只有引擎还停在这一步时才有确认动作 -->

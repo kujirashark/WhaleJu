@@ -17,6 +17,7 @@ from .storage.db import Database
 from .storage.util import dumps, loads, ulid, utc_now
 from .storage.vault import decrypt, encrypt, mask
 from .adapters.configured_provider import ConfiguredProvider
+from .adapters import call_log
 from .workflow.state_machine import GuardError, WorkflowEngine
 from .workflow.checkpoints import CheckpointManager
 from .workflow.generation import GenerationManager
@@ -263,8 +264,19 @@ async def generate_script_stream(pid: str, req: ScriptGenReq = ScriptGenReq()):
             async for kind, value in CONTENT.stream_script(pid, p["idea_text"], req.version):
                 if kind == "token":
                     yield "event: token\ndata: " + json.dumps({"t": value}, ensure_ascii=False) + "\n\n"
+                elif kind == "call":
+                    # 实时调用日志：请求地址、状态码、耗时、重试情况
+                    yield "event: call\ndata: " + json.dumps(value, ensure_ascii=False) + "\n\n"
                 else:
                     advance_status(pid, "script_ready")   # 剧本落库后同步推进到「等你确认剧本」
+                    # 附上本次调用的量化结果，让用户看到这次到底生成了多少
+                    meta = {
+                        "chars": sum(len(ep.get("script") or "") for ep in (value.get("episodes") or [])),
+                        "episodes": len(value.get("episodes") or []),
+                        "title": value.get("title") or "",
+                    }
+                    # meta 必须早于 done：前端收到 done 即结束读取
+                    yield "event: meta\ndata: " + json.dumps(meta, ensure_ascii=False) + "\n\n"
                     yield "event: done\ndata: " + json.dumps(value, ensure_ascii=False) + "\n\n"
         except NoProviderError as exc:
             raw = str(exc)
@@ -419,6 +431,10 @@ async def export_project(pid: str, req: ExportReq):
     })
     DB.execute("UPDATE projects SET status='DELIVER' WHERE id=?", (pid,))
     return result
+@app.get("/api/calls", dependencies=[Depends(auth)])
+def list_calls(limit: int = 60):
+    """最近的模型调用记录：让模型调用不再是黑盒。"""
+    return {"items": call_log.recent(limit)}
 @app.get("/api/assets/{asset_id}/file")
 def asset_file(asset_id: str, token: str | None = None):
     """素材只读文件端点：第 7 步要用 <img src> 展示真实画面，

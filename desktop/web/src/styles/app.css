@@ -170,6 +170,9 @@ img{display:block}
 .row .m{flex:1;min-width:0}
 .row .t{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .s{font-size:10px;color:var(--ink3);font-family:var(--mono)}
+.row .s.bad{color:var(--warn,#ffb547)}
+.call-row .m{min-width:0}
+.call-row .t{font-family:var(--mono);font-size:11px}
 .metric{padding:11px 0;border-bottom:1px solid var(--line)}
 .metric .l{font-size:11px;color:var(--ink3)}
 .metric .v{font-family:var(--mono);font-size:17px;color:var(--ink);margin-top:2px}

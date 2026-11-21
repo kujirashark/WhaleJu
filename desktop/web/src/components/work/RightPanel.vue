@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useProjectStore } from '@/stores/project'
 import { useGenStore } from '@/stores/gen'
 import { useUiStore } from '@/stores/ui'
+import { useCallsStore } from '@/stores/calls'
 const project = useProjectStore()
 const gen = useGenStore()
 const ui = useUiStore()
+const calls = useCallsStore()
 const tab = computed(() => project.tab)
 const done = computed(() => gen.done)
 const realCost = computed(() => Math.round(gen.items.reduce((a: number, b: any) => a + (b.cost || 0), 0) * 10) / 10)
@@ -16,6 +18,9 @@ function statusChip(s: string) {
   if (s === 'failed') return { cls: 'c-fail', text: '失败' }
   return { cls: 'c-wait', text: '排队' }
 }
+// 日志 tab：拉取引擎侧最近记录（覆盖图片/视频/镜头等所有能力）
+watch(tab, (t) => { if (t === 'calls') calls.load(80) })
+onMounted(() => { if (tab.value === 'calls') calls.load(80) })
 </script>
 <template>
   <aside class="right" aria-label="项目内容">
@@ -23,6 +28,7 @@ function statusChip(s: string) {
       <button :class="{ on: tab === 'shots' }" @click="project.tab = 'shots'">镜头</button>
       <button :class="{ on: tab === 'roles' }" @click="project.tab = 'roles'">角色</button>
       <button :class="{ on: tab === 'cost' }" @click="project.tab = 'cost'">花费</button>
+      <button :class="{ on: tab === 'calls' }" @click="project.tab = 'calls'">日志</button>
     </div>
     <div class="rbody">
       <template v-if="tab === 'shots'">
@@ -41,6 +47,17 @@ function statusChip(s: string) {
           <div class="m"><div class="t">{{ r.name }}</div><div class="s">{{ project.locked ? '已确认' : (project.selectedRoles.has(r.id) ? '已选中' : '未选中') }}</div></div>
           <span class="chip" :class="project.locked ? 'c-ok' : 'c-wait'">{{ project.locked ? '已确认' : '待确认' }}</span>
         </div>
+      </template>
+      <template v-else-if="tab === 'calls'">
+        <div v-if="!calls.items.length" class="empty-mini">还没有模型调用记录。发起一次生成后，这里会列出真实的请求、状态码与耗时。</div>
+        <div v-for="(e, i) in calls.items" :key="i" class="row call-row">
+          <div class="m">
+            <div class="t">{{ e.method }} {{ e.path || '/' }} · {{ e.status || '失败' }}</div>
+            <div class="s">{{ e.ts }} · {{ e.ms }}ms · {{ e.model }}<template v-if="e.attempt > 1"> · 第{{ e.attempt }}次</template></div>
+            <div v-if="e.error || e.note" class="s" :class="{ bad: !!e.error }">{{ e.error || e.note }}</div>
+          </div>
+        </div>
+        <button class="btn btn-t" @click="calls.load(80)">刷新</button>
       </template>
       <template v-else>
         <div class="metric"><div class="l">已生成镜头</div><div class="v">{{ done }}</div></div>
