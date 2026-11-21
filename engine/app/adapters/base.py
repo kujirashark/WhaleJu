@@ -48,6 +48,8 @@ class ProbeResult:
     abilities: tuple[str, ...] = ()
     price_hint: str = ""
     error: str | None = None
+    models: tuple[str, ...] = ()   # 厂商返回的可用模型标识（用于校验用户填的模型名对不对）
+    warning: str | None = None     # 连接成功但配置可能用错（如把图片模型填进视频槽）
 class Provider(Protocol):
     meta: ProviderMeta
     async def probe(self) -> ProbeResult: ...

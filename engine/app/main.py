@@ -5,7 +5,7 @@ import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import Depends, FastAPI, HTTPException, Header
+from fastapi import Depends, FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -14,13 +14,14 @@ from .adapters.registry import ProviderRegistry
 from .adapters.loader import load_configured_providers
 from .billing.ledger import CreditLedger, InsufficientCredits
 from .storage.db import Database
+from .storage.assets import AssetStore
 from .storage.util import dumps, loads, ulid, utc_now
 from .storage.vault import decrypt, encrypt, mask
 from .adapters.configured_provider import ConfiguredProvider
 from .adapters import call_log
 from .workflow.state_machine import GuardError, WorkflowEngine
 from .workflow.checkpoints import CheckpointManager
-from .workflow.generation import GenerationManager
+from .workflow.generation import GenerationManager, PRICE_PER_IMAGE, PRICE_PER_SHOT
 from .workflow.content import ContentGenerator, NoProviderError
 from .agent.agent import ConversationAgent, Intent
 from .publish.kit import PublishKit
@@ -32,8 +33,9 @@ CHECKPOINTS = CheckpointManager(DB)
 AGENT = ConversationAgent()
 REGISTRY = ProviderRegistry()
 PUBLISH = PublishKit(DATA_DIR)
-GENERATIONS = GenerationManager(DB, LEDGER, REGISTRY)
-CONTENT = ContentGenerator(DB, REGISTRY)
+ASSETS = AssetStore(DB, DATA_DIR)
+GENERATIONS = GenerationManager(DB, LEDGER, REGISTRY, ASSETS)
+CONTENT = ContentGenerator(DB, REGISTRY, ASSETS)
 def refresh_providers() -> list[str]:
     """从本机配置重建真实 Provider 注册表（无任何配置时为空）。"""
     return load_configured_providers(DB, REGISTRY)
@@ -73,15 +75,19 @@ def sync_status(pid: str, p: dict, role_count: int = 0) -> str:
         st = advance_status(pid, "roles_ready",
                             {"role_count": role_count, "candidate_count": role_count}) or st
     return st
-def _asset_url(local_path: str | None, asset_id: str | None) -> str | None:
-    """素材可访问地址：厂商 URL 直接用；本机文件走引擎的只读文件端点。"""
+def _asset_url(local_path: str | None, asset_id: str | None, base: str = "") -> str | None:
+    """素材可访问地址：厂商 URL 直接用；本机文件走引擎的只读文件端点。
+    必须返回**绝对地址**：前端页面由 Vite/Tauri 提供，<img src="/api/...">
+    会指向前端源站而不是引擎源站，结果就是一片裂图。所以这里带上引擎基址。
+    """
     if not local_path:
         return None
     if local_path.startswith("http://") or local_path.startswith("https://"):
         return local_path
     if not asset_id:
         return None
-    return f"/api/assets/{asset_id}/file?token={LOCAL_TOKEN}"
+    prefix = base.rstrip("/") if base else ""
+    return f"{prefix}/api/assets/{asset_id}/file?token={LOCAL_TOKEN}"
 # 本地鉴权 Token：优先使用桌面壳通过 IPC 注入的随机令牌；
 # 独立运行时自动生成，重启轮换（防本机其他进程调用）。
 # 任何情况下都不通过公开接口下发——Tauri 侧由 start_engine 直接返回。
@@ -195,29 +201,58 @@ def restore_project(pid: str):
     with DB.tx() as c:
         c.execute("UPDATE projects SET deleted_at=NULL WHERE id=?", (pid,))
     return {"restored": True, "id": pid}
+def _backfill_character_refs(pid: str, chars: list[dict]) -> None:
+    """定妆图自愈落地：旧数据里存的是厂商临时链接（会过期），现场下载一份到本机。
+    幂等：已落地（有 asset_id）的直接跳过；下载失败保留原链接，界面仍可显示。
+    """
+    for ch in chars:
+        refs = loads(ch.get("ref_images"), [])
+        if not refs:
+            continue
+        first = refs[0]
+        if first.get("asset_id"):
+            continue
+        remote = first.get("remote_url") or first.get("url") or ""
+        if not remote.startswith("http"):
+            continue
+        asset = ASSETS.save_remote(pid, "image", remote, character_id=ch["id"])
+        if not asset:
+            continue
+        first["asset_id"] = asset["id"]
+        first["url"] = asset["local_path"]
+        first["remote_url"] = remote
+        payload = dumps(refs)
+        with DB.tx() as c:
+            c.execute("UPDATE characters SET ref_images=? WHERE id=?", (payload, ch["id"]))
+        # 同步内存态：否则调用方读到的还是旧的厂商链接
+        ch["ref_images"] = payload
 @app.get("/api/projects/{pid}", dependencies=[Depends(auth)])
-def get_project(pid: str):
+def get_project(pid: str, request: Request):
     p = DB.get("projects", pid)
     if not p or p.get("deleted_at"):
         raise HTTPException(404, "项目不存在或已被清理")
+    base = str(request.base_url)
     script = loads(p.get("script_json"), None) if p.get("script_json") else None
     shots = loads(p.get("shots_json"), None) if p.get("shots_json") else None
     chars = DB.list(
         "SELECT id,name,desc_text,ref_images,locked FROM characters WHERE project_id=? ORDER BY id",
         (pid,),
     )
+    _backfill_character_refs(pid, chars)
     for ch in chars:
         refs = loads(ch.get("ref_images"), [])
-        ch["ref_url"] = refs[0].get("url") if refs else None
+        first = refs[0] if refs else {}
+        # 定妆图已落地到本机 → 走引擎文件端点；没落地成功才退回厂商链接
+        ch["ref_url"] = _asset_url(first.get("url"), first.get("asset_id"), base)
+        ch["remote_url"] = first.get("remote_url")
     # 真实素材：第 7 步「看成片」必须读引擎里的真实产物，
     # 否则刷新页面后前端内存态清空，用户看到空白的第 7 步。
-    assets = DB.list(
-        "SELECT id,kind,local_path,size_bytes,created_at FROM assets "
-        "WHERE project_id=? AND kind<>'work' ORDER BY created_at",
-        (pid,),
-    )
+    assets = ASSETS.list_project(pid)
     for a in assets:
-        a["url"] = _asset_url(a.get("local_path"), a.get("id"))
+        a["url"] = _asset_url(a.get("local_path"), a.get("id"), base)
+        # 归一化素材类型：老数据全是 image，用 character_id 区分定妆图与镜头画面
+        if a.get("kind") == "image":
+            a["kind"] = "character" if a.get("character_id") else "shot"
     status = sync_status(pid, p, len(chars))
     return {
         **p,
@@ -292,7 +327,7 @@ async def generate_script_stream(pid: str, req: ScriptGenReq = ScriptGenReq()):
 class CharactersGenReq(BaseModel):
     count: int = Field(default=5, ge=1, le=20)
 @app.post("/api/projects/{pid}/characters/generate", dependencies=[Depends(auth)])
-async def generate_characters(pid: str, req: CharactersGenReq = CharactersGenReq()):
+async def generate_characters(pid: str, request: Request, req: CharactersGenReq = CharactersGenReq()):
     """用已配置的图片模型真实生成定妆图；未配置则明确拒绝。"""
     p = DB.get("projects", pid)
     if not p:
@@ -302,6 +337,13 @@ async def generate_characters(pid: str, req: CharactersGenReq = CharactersGenReq
         chars = await CONTENT.generate_characters(pid, req.count)
         advance_status(pid, "roles_ready",
                        {"role_count": len(chars), "candidate_count": len(chars)})  # CHARACT → CP2_PENDING
+        # 定妆图已落地本机 → 给出引擎可访问的绝对地址，界面直接就能显示
+        base = str(request.base_url) if request is not None else ""
+        for ch in chars:
+            local = ch.get("ref_url") or ""
+            if local and not local.startswith("http"):
+                ch["ref_url"] = _asset_url(local, ch.get("asset_id"), base)
+                ch["asset_id"] = ch.get("asset_id") or ""
         return {"items": chars}
     except NoProviderError as exc:
         raise HTTPException(400, {"code": exc.code, "message": str(exc), "hint": "到设置里配置图片模型并测试连接"})
@@ -408,22 +450,44 @@ async def export_project(pid: str, req: ExportReq):
     p = DB.get("projects", pid)
     if not p:
         raise HTTPException(404, "项目不存在")
-    # 真实素材优先：取该项目已生成完成的 video 素材拼合成片。
-    # 无真实素材 → 明确拒绝（409），不再生成任何演示片。
+    # 真实素材优先：优先用视频素材（模型生成的成片片段），
+    # 没有视频就用第 6 步生成的画面序列合成一条动态漫成片。
+    # 两者都没有 → 明确拒绝（409），绝不生成任何演示片。
     src = req.source_path
-    if not src:
-        rows = DB.list(
-            "SELECT local_path FROM assets WHERE project_id=? AND kind='video' ORDER BY created_at",
-            (pid,),
-        )
-        real = [r["local_path"] for r in rows if Path(r["local_path"]).exists()]
-        src = real[0] if real else None
-    if not src or not Path(src).exists():
-        raise HTTPException(409, {
-            "code": "E4002", "message": "还没有真实画面可以导出",
-            "hint": "请先完成第 6 步生成真实画面。没有素材时不会生成演示片。",
-        })
-    result = await PUBLISH.compose(src, ai_badge=True)  # 强制 true，忽略 req.ai_badge
+    result: dict | None = None
+    if src and Path(src).exists():
+        result = await PUBLISH.compose(src, ai_badge=True)  # 强制 true，忽略 req.ai_badge
+    else:
+        videos = [
+            ASSETS.resolve(r["local_path"]) for r in DB.list(
+                "SELECT local_path FROM assets WHERE project_id=? AND kind='video' ORDER BY created_at",
+                (pid,),
+            ) if ASSETS.resolve(r["local_path"]).exists()
+        ]
+        if videos:
+            result = await PUBLISH.compose(videos[0], ai_badge=True)
+        else:
+            frames = [
+                ASSETS.resolve(r["local_path"]) for r in DB.list(
+                    "SELECT local_path FROM assets WHERE project_id=? "
+                    "AND (kind='shot' OR (kind='image' AND character_id IS NULL)) "
+                    "ORDER BY created_at",
+                    (pid,),
+                ) if ASSETS.resolve(r["local_path"]).exists()
+            ]
+            if not frames:
+                raise HTTPException(409, {
+                    "code": "E4002", "message": "还没有真实画面可以导出",
+                    "hint": "请先完成第 6 步生成真实画面。没有素材时不会生成演示片。",
+                })
+            try:
+                result = await PUBLISH.compose_slides(
+                    frames, seconds_per_image=2.0, ratio=req.ratio or "9:16",
+                )
+            except RuntimeError as exc:
+                # 没有 ffmpeg 时不硬堵死：把画面素材包导出到作品库，
+                # 用户装了 ffmpeg 后可以自行合成，成果不会丢。
+                result = PUBLISH.export_frames(frames, project_id=pid, project_name=p.get("name") or "未命名项目")
     DB.insert("assets", {
         "id": result["work_id"], "project_id": pid, "kind": "work",
         "local_path": result["local_path"], "sha256": "pending",
@@ -437,7 +501,7 @@ def list_calls(limit: int = 60):
     return {"items": call_log.recent(limit)}
 @app.get("/api/assets/{asset_id}/file")
 def asset_file(asset_id: str, token: str | None = None):
-    """素材只读文件端点：第 7 步要用 <img src> 展示真实画面，
+    """素材只读文件端点：第 3/7 步要用 <img src> 展示真实画面，
     无法携带自定义请求头，因此这里用查询参数校验本地令牌。"""
     if token != LOCAL_TOKEN:
         raise HTTPException(401, "令牌无效")
@@ -447,7 +511,9 @@ def asset_file(asset_id: str, token: str | None = None):
     ref = a["local_path"]
     if ref.startswith("http://") or ref.startswith("https://"):
         raise HTTPException(409, "该素材是远端地址，请直接打开厂商链接")
-    p = Path(ref)
+    # 库里存的是相对数据目录的路径，必须按数据目录解析，
+    # 直接 Path(ref) 会相对于进程工作目录，文件明明存在却报 404。
+    p = ASSETS.resolve(ref)
     if not p.exists():
         raise HTTPException(404, "素材文件已被移动或删除")
     return FileResponse(p)
@@ -467,6 +533,16 @@ def work_caption(work_id: str, body: str = ""):
     p = DB.get("projects", work["project_id"])
     name = p["name"] if p else "未命名项目"
     return {"caption": PUBLISH.caption(name, 1, body), "cached": False}
+@app.get("/api/system/capabilities", dependencies=[Depends(auth)])
+def system_capabilities():
+    """本机能力自检：导出成片需要 ffmpeg，没有要提前告诉用户。"""
+    from .publish.kit import _ffmpeg_path
+    ffmpeg = _ffmpeg_path()
+    return {
+        "ffmpeg": bool(ffmpeg),
+        "ffmpeg_path": ffmpeg,
+        "hint": None if ffmpeg else "本机没有可用的 ffmpeg：画面可以正常生成，但导出 mp4 需要它",
+    }
 @app.get("/api/wallet", dependencies=[Depends(auth)])
 def wallet():
     return LEDGER.wallet()
@@ -559,7 +635,8 @@ async def test_model_config(slot: str):
         error += "；服务地址应填到 /v1 为止（如 https://厂商域名/v1），不要带 /models 或 /chat/completions"
     return {"ok": result.ok, "verified": result.ok, "latency_ms": result.latency_ms,
             "abilities": list(result.abilities), "price_hint": result.price_hint,
-            "error": error, "mock": False}
+            "error": error, "warning": result.warning, "mock": False,
+            "models": list(result.models)[:20]}
 @app.get("/api/capabilities", dependencies=[Depends(auth)])
 def capabilities():
     """各能力槽的就绪状态，供前端在生成前明确提示未配置项。"""
@@ -571,32 +648,74 @@ def capabilities():
     }
 class GenStartReq(BaseModel):
     shot_count: int = Field(default=12, ge=1, le=60)
+    ability: str = Field(default="image", pattern="^(image|video)$")
 @app.post("/api/projects/{pid}/generation/start", dependencies=[Depends(auth)])
 async def generation_start(pid: str, req: GenStartReq = GenStartReq()):
-    """设计 §6.4：开始生成批次。冻结在提交前，额度不足时 E2001。"""
+    """设计 §6.4：开始生成批次。
+    能力选择：第 6 步「生成画面」默认走 image 能力（图片模型），
+    这与界面语义一致，也让只配了文字+图片模型的用户能把流程走完；
+    显式指定 video 时才走视频模型。
+    额度校验按来源区分：
+    - 用自己的 API 密钥（owned）/ 本机模型（local）→ 不消耗平台额度，直接放行；
+    - 用平台额度（proxy）→ 余额必须够跑完这批，否则明确拦下并给出出路。
+    过去不分来源一律按平台额度拦，用自己密钥的用户会被假额度卡死。
+    """
     p = DB.get("projects", pid)
     if not p:
         raise HTTPException(404, "项目不存在")
-    # 前置校验：视频能力必须已配置并通过真实连接测试，否则拒绝生成（无 Mock 兜底）
-    ensure_providers("video")
-    if not REGISTRY.has_ability("video"):
+    ability = req.ability or "image"
+    # 前置校验：这一项能力必须已配置并通过真实连接测试，否则拒绝生成（无 Mock 兜底）
+    ensure_providers(ability)
+    if ability == "image" and not REGISTRY.has_ability("image"):
+        # 降级：没有图片模型但有视频模型时，用视频模型出画面（流程照样能走完）
+        ensure_providers("video")
+        if REGISTRY.has_ability("video"):
+            ability = "video"
+        else:
+            raise HTTPException(400, {
+                "code": "E4001", "message": "还没有配置可用的图片模型",
+                "hint": "请先到「设置 → 生成图片」填写服务地址和模型，并点「测试连接」通过后再开始",
+            })
+    if not REGISTRY.has_ability(ability):
+        want = "图片" if ability == "image" else "视频"
+        where = "生成图片" if ability == "image" else "生成视频"
         raise HTTPException(400, {
-            "code": "E4001", "message": "还没有配置可用的视频模型",
-            "hint": "请先到「设置 → 生成视频」填写服务地址和模型，并点「测试连接」通过后再开始",
+            "code": "E4001", "message": f"还没有配置可用的{want}模型",
+            "hint": f"请先到「设置 → {where}」填写服务地址和模型，并点「测试连接」通过后再开始",
         })
+    route = REGISTRY.route(ability, "key")
+    uses_own_key = bool(route and route.source in ("owned", "local"))
+    unit = PRICE_PER_IMAGE if ability == "image" else PRICE_PER_SHOT_ESTIMATE
     wallet = LEDGER.wallet()
-    if wallet["balance"] < PRICE_PER_SHOT_ESTIMATE * req.shot_count:
+    need = unit * req.shot_count
+    if not uses_own_key and wallet["balance"] < need:
         raise HTTPException(400, {
-            "code": "E2001", "message": "额度不够跑完这批",
-            "need": PRICE_PER_SHOT_ESTIMATE * req.shot_count,
+            "code": "E2001",
+            "message": f"平台额度不够跑完这批：需要 {need:g}，当前余额 {wallet['balance']:g}",
+            "need": need,
             "balance": wallet["balance"],
+            "hint": "两条路任选：顶栏「额度」充值后重试；或在「设置 → 生成视频」改成「用我自己的 API 密钥」，"
+                    "用你自己的账号计费，不消耗平台额度",
         })
-    batch = await GENERATIONS.start(pid, req.shot_count)
+    batch = await GENERATIONS.start(pid, req.shot_count, ability=ability)
     advance_status(pid, "budget_confirmed",
-                   {"available": wallet["balance"], "required": PRICE_PER_SHOT_ESTIMATE * req.shot_count})
-    return {"batch_id": batch.id, "queued": req.shot_count,
-            "route_reason": "按镜头重要性自动分配：重要镜头优先自带模型，过渡镜头走平台额度"}
-PRICE_PER_SHOT_ESTIMATE = 9.0
+                   {"available": wallet["balance"], "required": need})
+    return {
+        "batch_id": batch.id, "queued": req.shot_count,
+        "ability": ability,
+        "unit_price": unit,
+        "estimated_cost": need,
+        "route_reason": (
+            "用你自己的 API 密钥生成，不消耗平台额度"
+            if uses_own_key else
+            f"用{'图片' if ability == 'image' else '视频'}模型逐个镜头生成，"
+            f"每个镜头 {unit:g} 额度，失败不计费"
+        ),
+        "billing": "own_key" if uses_own_key else "platform_credits",
+        "wallet": wallet,
+    }
+PRICE_PER_SHOT_ESTIMATE = PRICE_PER_SHOT
+# PRICE_PER_IMAGE 从 workflow.generation 导入（唯一来源，避免两处价格不一致）
 @app.post("/api/projects/{pid}/generation/pause", dependencies=[Depends(auth)])
 async def generation_pause(pid: str):
     r = await GENERATIONS.pause(pid)
@@ -633,15 +752,22 @@ async def generation_submit(req: GenReq):
             "hint": "请先到设置里配置视频模型并测试连接通过",
         })
     provider = REGISTRY.get(route.provider_id)
-    freeze_id = LEDGER.freeze(req.duration_s * 0.9, "smoke", route.provider_id, "video")
+    # 自带密钥/本地模型来源不消耗平台额度（与批量生成同一口径）
+    consumes_credits = route.source == "proxy"
+    freeze_id = ""
+    if consumes_credits:
+        freeze_id = LEDGER.freeze(req.duration_s * 0.9, "smoke", route.provider_id, "video")
     try:
         tid = await provider.submit(VideoGenRequest(prompt=req.prompt, duration_s=req.duration_s, ratio=req.ratio))
         result = await provider.poll(tid)
     except Exception as exc:  # noqa: BLE001 - 边界：任何 Provider 异常都要退回冻结
-        LEDGER.settle(freeze_id, 0, False, "provider_error")
+        if freeze_id:
+            LEDGER.settle(freeze_id, 0, False, "provider_error")
         raise HTTPException(502, f"生成失败：{exc}")
-    LEDGER.settle(freeze_id, result.raw_cost_estimate, result.ok, result.fail_reason)
+    if freeze_id:
+        LEDGER.settle(freeze_id, result.raw_cost_estimate, result.ok, result.fail_reason)
     return {
         "task_id": tid, "ok": result.ok, "asset_ref": result.asset_ref,
         "route_reason": route.reason, "wallet": LEDGER.wallet(),
+        "billing": "platform_credits" if consumes_credits else "own_key",
     }

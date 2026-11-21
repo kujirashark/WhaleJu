@@ -42,7 +42,7 @@ onMounted(() => { if (tab.value === 'calls') calls.load(80) })
       <template v-else-if="tab === 'roles'">
         <div v-if="!project.characters.length" class="empty-mini">还没有定妆图，去第 3 步用图片模型生成。</div>
         <div v-for="r in project.characters" :key="r.id" class="row">
-          <img v-if="r.ref_url" :src="r.ref_url" alt="">
+          <img v-if="project.assetUrl(r.ref_url) || project.assetUrl(r.remote_url)" :src="project.assetUrl(r.ref_url) || project.assetUrl(r.remote_url)" alt="" loading="lazy">
           <div v-else class="row-ph">照</div>
           <div class="m"><div class="t">{{ r.name }}</div><div class="s">{{ project.locked ? '已确认' : (project.selectedRoles.has(r.id) ? '已选中' : '未选中') }}</div></div>
           <span class="chip" :class="project.locked ? 'c-ok' : 'c-wait'">{{ project.locked ? '已确认' : '待确认' }}</span>

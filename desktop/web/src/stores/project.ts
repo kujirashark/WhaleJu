@@ -33,6 +33,13 @@ export const useProjectStore = defineStore('project', () => {
     PLANNED: 4, RUNNING: 5, CP3_PENDING: 6, DELIVER: 7,
   }
   const maxStep = computed(() => STEP_MAX_BY_STATUS[status.value] ?? 0)
+  /** 素材可显示地址：引擎可能给绝对地址，也可能给 /api/... 相对地址。
+   *  相对地址必须补上引擎基址，否则 <img src="/api/..."> 会指向前端源站 → 一片裂图。 */
+  function assetUrl(u?: string | null): string {
+    if (!u) return ''
+    if (/^(https?:|data:|blob:)/i.test(u)) return u
+    return `${engine.base}${u.startsWith('/') ? '' : '/'}${u}`
+  }
   /** 流式生成剧本：读取 SSE 逐块更新 streamText，完成后落库结果写入 script。 */
   async function genScriptStream(version = 1): Promise<{ ok: boolean; error?: string }> {
     if (!currentId.value) return { ok: false, error: '没有当前项目' }
@@ -251,7 +258,7 @@ export const useProjectStore = defineStore('project', () => {
   return {
     currentId, step, tab, scriptVer, selectedRoles, locked, ratio, player, exp, projects,
     detail, script, shots, characters, contentBusy, contentError, streamText,
-    status, assets, maxStep,
+    status, assets, maxStep, assetUrl,
     goto, confirmStep, create, loadProjects, loadDetail, remove, loadTrash, restore,
     genScript, genScriptStream, genShots, genCharacters, toggleRole,
     togglePlay, startExport, exportWork,

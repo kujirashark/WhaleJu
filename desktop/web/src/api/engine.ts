@@ -15,6 +15,9 @@ class EngineClient {
   token = ''
   online = false
   error = ''
+  /** 最近一次接口错误的结构化详情（code/message/hint/need/balance），
+   *  供界面按错误类型给出正确出路（充值 / 去设置 / 等额度恢复）。 */
+  lastError: { code?: string; message?: string; hint?: string; need?: number; balance?: number } = {}
   mode: 'booting' | 'tauri' | 'browser' = 'booting'
   /** 连接完成的 Promise，供 UI 等待（避免 ref 追踪不到普通属性变化） */
   ready!: Promise<boolean>
@@ -74,8 +77,16 @@ class EngineClient {
         try {
           const j = await res.json()
           const d = j?.detail
-          detail = (typeof d === 'string' ? d : (d?.message || j?.message || ''))
-          if (d?.hint) detail += ` · ${d.hint}`
+          const obj = typeof d === 'string' ? { message: d } : (d || {})
+          this.lastError = {
+            code: obj.code,
+            message: obj.message,
+            hint: obj.hint,
+            need: typeof obj.need === 'number' ? obj.need : undefined,
+            balance: typeof obj.balance === 'number' ? obj.balance : undefined,
+          }
+          detail = obj.message || j?.message || ''
+          if (obj.hint) detail += ` · ${obj.hint}`
         } catch { /* 非 JSON 响应保留状态文本 */ }
         throw new Error(detail || `${res.status} 引擎返回错误`)
       }

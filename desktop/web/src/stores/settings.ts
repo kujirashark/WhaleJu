@@ -133,12 +133,18 @@ export const useSettingsStore = defineStore('settings', () => {
           return false
         }
       }
-      const r = await engine.api<{ ok: boolean; verified: boolean; error?: string; price_hint?: string }>(
+      const r = await engine.api<{ ok: boolean; verified: boolean; error?: string; price_hint?: string; warning?: string }>(
         `/api/model-configs/${slot}/test`, { method: 'POST' },
       )
-      probeResults.value[slot] = r?.ok
-        ? `连接测试通过${r.price_hint ? ' · ' + r.price_hint : ''}`
-        : `连接测试失败：${r?.error || (engine.error ? `引擎错误：${engine.error}` : '请检查地址和密钥')}`
+      if (r?.ok) {
+        // 连接成功但模型标识可能填错（如把图片模型填进视频槽）：
+        // 这类问题测试连接查不出来，必须明确提示，否则生成时才炸。
+        probeResults.value[slot] = r.warning
+          ? `连接测试通过 · ${r.price_hint || ''}｜${r.warning}`
+          : `连接测试通过${r.price_hint ? ' · ' + r.price_hint : ''}`
+      } else {
+        probeResults.value[slot] = `连接测试失败：${r?.error || (engine.error ? `引擎错误：${engine.error}` : '请检查地址和密钥')}`
+      }
       await load()
       return !!r?.ok
     } finally {

@@ -390,7 +390,8 @@ async def test_batch_pause_freezes_progress():
             return GenResult(ok=True, asset_ref=f"http://test/{tid}.mp4", raw_cost_estimate=9.0)
     REGISTRY.register(SlowProvider())
     pid = "prj_pause_" + ulid()
-    batch = await GENERATIONS.start(pid, shot_count=30)
+    # 显式指定 video：这个用例测的是异步视频在途时暂停能冻结进度
+    batch = await GENERATIONS.start(pid, shot_count=30, ability="video")
     await asyncio.sleep(0.5)
     paused = await GENERATIONS.pause(pid)
     assert paused["paused"] is True

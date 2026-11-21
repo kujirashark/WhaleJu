@@ -16,9 +16,11 @@ class NoProviderError(Exception):
         super().__init__(message)
         self.code = code
 class ContentGenerator:
-    def __init__(self, db: Database, registry: ProviderRegistry):
+    def __init__(self, db: Database, registry: ProviderRegistry, assets=None):
         self.db = db
         self.registry = registry
+        # 素材落地仓库：厂商给的临时链接会过期，必须取回本机
+        self.assets = assets
     def _provider(self):
         route = self.registry.route("text", "key")
         if not route:
@@ -117,7 +119,11 @@ class ContentGenerator:
         return payload
     async def generate_characters(self, project_id: str, count: int = 5) -> list[dict]:
         """用已配置的 image 模型生成定妆参考图；未配置则明确拒绝。
-        返回 [{id, name, desc_text, ref_url}]，并落 characters 表。"""
+        返回 [{id, name, desc_text, ref_url}]，并落 characters 表。
+        生成的图片会立刻下载到本机（assets 目录）并登记 assets 表：
+        厂商给的是带签名、会过期的链接，直接存链接的话项目过一天全是裂图。
+        下载失败时保留原厂链接兜底，不谎报成功。
+        """
         route = self.registry.route("image", "key")
         if not route:
             raise NoProviderError("还没有配置可用的图片模型，请先到「设置 → 生成图片」配置并测试连接")
@@ -141,15 +147,43 @@ class ContentGenerator:
                 url = gen.asset_ref or ""
                 if not url and hasattr(provider, "_assets"):
                     url = provider._assets.get(tid, "")
+                if not url:
+                    raise NoProviderError("图片模型没有返回图片地址")
                 cid = f"chr_{project_id}_{i + 1}"
+                # 先落角色行，再落素材（素材有指向角色的外键，顺序反了会插不进去）
                 with self.db.tx() as c:
                     c.execute(
                         """INSERT OR REPLACE INTO characters(id,project_id,name,desc_text,ref_images,locked)
                            VALUES(?,?,?,?,?,0)""",
-                        (cid, project_id, f"角色 {i + 1}", desc,
-                         json.dumps([{"url": url, "rank": 1}], ensure_ascii=False)),
+                        (cid, project_id, f"角色 {i + 1}", desc, json.dumps([], ensure_ascii=False)),
                     )
-                result.append({"id": cid, "name": f"角色 {i + 1}", "desc_text": desc, "ref_url": url})
+                # 落地到本机：链接会过期，落地后项目永久可看
+                local_path = ""
+                asset_id = ""
+                if self.assets is not None:
+                    asset = self.assets.save_remote(
+                        project_id, "character", url, character_id=cid,
+                    )
+                    if asset:
+                        local_path = asset["local_path"]
+                        asset_id = asset["id"]
+                with self.db.tx() as c:
+                    c.execute(
+                        """UPDATE characters SET ref_images=? WHERE id=?""",
+                        (json.dumps([{
+                            "asset_id": asset_id,
+                            "url": local_path or url,
+                            "remote_url": url,
+                            "rank": 1,
+                        }], ensure_ascii=False), cid),
+                    )
+                result.append({
+                    "id": cid, "name": f"角色 {i + 1}", "desc_text": desc,
+                    "ref_url": local_path or url,
+                    "asset_id": asset_id,
+                    "remote_url": url,
+                    "local_saved": bool(asset_id),
+                })
             except NoProviderError:
                 raise
             except Exception as exc:  # noqa: BLE001

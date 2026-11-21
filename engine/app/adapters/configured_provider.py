@@ -172,7 +172,11 @@ class ConfiguredProvider:
                     continue
                 raise RuntimeError(f"流式连接失败：{str(exc)[:120]}") from exc
     async def probe(self) -> ProbeResult:
-        """真实探测：GET {endpoint}/models，成功即视为可用。不返回任何 mock 结果。"""
+        """真实探测：GET {endpoint}/models，成功即视为可用。不返回任何 mock 结果。
+        额外做一件用户真正需要的事：把厂商返回的模型列表带回来，
+        便于核对「你填的模型标识」是不是这个厂商真有的模型
+        （最常见的错：把图片模型填到生成视频槽位，测试能过、生成必失败）。
+        """
         t0 = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=10.0) as c:
@@ -182,15 +186,24 @@ class ConfiguredProvider:
             if ok:
                 try:
                     data = r.json()
-                    models = [m.get("id", "") for m in data.get("data", [])][:10]
+                    models = [m.get("id", "") for m in data.get("data", [])][:50]
                 except Exception:  # noqa: BLE001
                     pass
+            warning = None
+            if ok and self.model and models and self.model not in models:
+                warning = (
+                    f"连接成功，但你填的模型标识「{self.model}」不在厂商返回的模型列表里，"
+                    "生成时大概率会失败。列表里相近的有：" +
+                    "、".join(m for m in models if m and m.lower() != self.model.lower())[:120]
+                )
             return ProbeResult(
                 ok=ok,
                 latency_ms=int((time.monotonic() - t0) * 1000),
                 abilities=self.meta.abilities if ok else (),
                 price_hint=f"已连接 · {len(models)} 个模型" if ok else "",
                 error=None if ok else f"HTTP {r.status_code} · {r.text[:80]}",
+                models=tuple(models),
+                warning=warning,
             )
         except Exception as exc:  # noqa: BLE001
             return ProbeResult(ok=False, error=f"连接失败：{str(exc)[:120]}")
@@ -233,8 +246,14 @@ class ConfiguredProvider:
                 self._results[task_id] = GenResult(ok=False, fail_reason=f"provider_error: {err}")
                 return task_id
             try:
-                url = data["data"][0]["url"]
-                self._results[task_id] = GenResult(ok=True, units_used=1.0)
+                item = data["data"][0]
+                url = str(item.get("url") or "")
+                if not url and item.get("b64_json"):
+                    # 部分厂商不返回链接，直接给 base64：转成 data URL 交给落盘层处理
+                    url = "data:image/png;base64," + str(item["b64_json"])
+                if not url:
+                    raise KeyError("url")
+                self._results[task_id] = GenResult(ok=True, units_used=1.0, asset_ref=url)
                 self._assets[task_id] = url
             except (KeyError, IndexError, TypeError) as exc:
                 self._results[task_id] = GenResult(ok=False, fail_reason=f"bad_response: {exc}")

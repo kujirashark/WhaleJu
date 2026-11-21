@@ -8,13 +8,14 @@
 """
 from __future__ import annotations
 import asyncio
+import json
 import time
 from dataclasses import dataclass, field
 from typing import Any
 from ..adapters.base import GenResult
-from ..adapters.base import VideoGenRequest
+from ..adapters.base import ImageGenRequest, VideoGenRequest
 from ..adapters.registry import ProviderRegistry
-from ..billing.ledger import CreditLedger
+from ..billing.ledger import CreditLedger, InsufficientCredits
 from ..storage.db import Database
 from ..storage.util import ulid, utc_now
 @dataclass
@@ -26,6 +27,7 @@ class ShotProgress:
     auto_retry_left: int = 2
     cost: float = 0.0
     asset_ref: str | None = None    # 真实生成素材引用（厂商 URL / 本地路径）
+    ability: str = "image"          # 这一镜用哪种能力生成（image=画面 / video=视频）
 @dataclass
 class Batch:
     id: str
@@ -37,6 +39,9 @@ class Batch:
     finished_at: float | None = None
     task: asyncio.Task | None = None
     freeze_ids: dict[str, str] = field(default_factory=dict)
+    # 致命原因：厂商根本不支持这个能力（如把图片模型填进视频槽）。
+    # 一旦出现就立刻停批，不把 12 个镜头逐个撞一遍墙。
+    fatal_reason: str | None = None
     def counts(self) -> dict[str, int]:
         return {
             "done": sum(1 for i in self.items if i.status == "done"),
@@ -52,11 +57,17 @@ class Batch:
         eta = None
         if done and done < c["total"]:
             eta = max(1, round((elapsed / done) * (c["total"] - done)))
+        ability = self.items[0].ability if self.items else "image"
+        unit = price_for(ability)
         return {
             "batch_id": self.id,
             **c,
             "paused": self.paused,
             "eta_s": eta,
+            "fatal_reason": self.fatal_reason,
+            "ability": ability,
+            "unit_price": unit,
+            "estimated_cost": round(unit * c["total"], 2),
             "failed_items": [
                 {"shot_id": i.shot_id, "scene_desc": i.scene_desc,
                  "fail_reason": i.fail_reason, "auto_retry_left": i.auto_retry_left}
@@ -74,32 +85,72 @@ SCENES = [
     "写字楼 · 深夜加班", "街边 · 一碗面", "医院 · 走廊长椅", "病房 · 光",
     "老屋 · 门廊", "公园 · 长椅", "夕阳 · 大远景", "背影 · 定格",
 ]
-PRICE_PER_SHOT = 9.0
+PRICE_PER_SHOT = 9.0            # 视频镜头（平台代采口径）
+PRICE_PER_IMAGE = 1.5           # 画面（平台代采口径）：图片比视频便宜得多
 POLL_INTERVAL_S = 1.5       # 异步视频厂商轮询间隔
 POLL_MAX_ROUNDS = 120       # 单镜头最多轮询轮数（约 3 分钟），超时按失败退回冻结
+def price_for(ability: str) -> float:
+    return PRICE_PER_IMAGE if ability == "image" else PRICE_PER_SHOT
+def _is_capability_error(reason: str) -> bool:
+    """判断错误是不是"厂商根本不支持这个能力"（而不是偶发失败）。
+    典型场景：把图片模型填进「生成视频」槽，厂商返回 404/405，
+    重试多少次都不会成功 —— 必须立刻停下来并说清楚。
+    """
+    r = (reason or "").lower()
+    return any(k in r for k in (
+        "http 404", "http 405", "http 501", "not found", "method not allowed",
+        "unsupported", "no_provider_configured",
+    ))
 class GenerationManager:
-    def __init__(self, db: Database, ledger: CreditLedger, registry: ProviderRegistry):
+    def __init__(self, db: Database, ledger: CreditLedger, registry: ProviderRegistry, assets=None):
         self.db = db
         self.ledger = ledger
         self.registry = registry
+        # 素材落地仓库：厂商链接会过期，产物必须取回本机
+        self.assets = assets
         self.batches: dict[str, Batch] = {}
         self.by_project: dict[str, str] = {}
     def current(self, project_id: str) -> Batch | None:
         bid = self.by_project.get(project_id)
         return self.batches.get(bid) if bid else None
-    async def start(self, project_id: str, shot_count: int = 12) -> Batch:
+    async def start(self, project_id: str, shot_count: int = 12,
+                    ability: str = "image") -> Batch:
         existing = self.current(project_id)
         if existing and not existing.finished_at:
             return existing
         batch = Batch(id=ulid(), project_id=project_id, total=shot_count)
+        scenes = self._scenes_from_project(project_id, shot_count)
         batch.items = [
-            ShotProgress(shot_id=f"s{i+1}", scene_desc=SCENES[i % len(SCENES)])
+            ShotProgress(shot_id=f"s{i + 1}", scene_desc=scenes[i], ability=ability)
             for i in range(shot_count)
         ]
         self.batches[batch.id] = batch
         self.by_project[project_id] = batch.id
         batch.task = asyncio.create_task(self._run(batch), name=f"batch-{batch.id}")
         return batch
+    def _scenes_from_project(self, project_id: str, shot_count: int) -> list[str]:
+        """镜头描述必须来自用户第 5 步确认的真实分镜表。
+        过去这里用的是写死的示例场景，导致生成的画面和用户看到的镜头表对不上，
+        画面里出现的是程序自己编的场景。
+        """
+        scenes: list[str] = []
+        try:
+            row = self.db.get("projects", project_id) or {}
+        except Exception:  # noqa: BLE001
+            row = {}
+        raw = row.get("shots_json")
+        if raw:
+            try:
+                data = json.loads(raw)
+                for s in (data.get("shots") or [])[:shot_count]:
+                    desc = str(s.get("scene") or "").strip()
+                    if desc:
+                        scenes.append(desc)
+            except (ValueError, TypeError, AttributeError):
+                scenes = []
+        while len(scenes) < shot_count:
+            scenes.append(SCENES[len(scenes) % len(SCENES)])
+        return scenes
     async def pause(self, project_id: str) -> dict[str, Any] | None:
         batch = self.current(project_id)
         if not batch:
@@ -127,25 +178,76 @@ class GenerationManager:
     async def _wait_pause(self, batch: Batch) -> None:
         while batch.paused:
             await asyncio.sleep(0.1)
+    async def _prompt_for(self, project_id: str, scene_desc: str) -> str:
+        """组装生成提示词：镜头场景 + 已确认角色的外貌锚点（保持人物一致）。"""
+        anchors: list[str] = []
+        try:
+            rows = self.db.list(
+                "SELECT name, desc_text FROM characters WHERE project_id=? ORDER BY id", (project_id,)
+            )
+            for r in rows[:5]:
+                desc = str(r.get("desc_text") or "").strip()
+                if desc:
+                    anchors.append(desc)
+        except Exception:  # noqa: BLE001 - 锚点取不到不阻断生成
+            anchors = []
+        if not anchors:
+            return f"{scene_desc}。竖屏构图，写实电影感，画面干净。"
+        return (
+            f"{scene_desc}。竖屏构图，写实电影感，画面干净。\n"
+            "人物设定（必须与定妆图保持一致）：\n" + "\n".join(f"- {a}" for a in anchors)
+        )
     async def _run_shot(self, batch: Batch, idx: int, item: ShotProgress) -> bool:
-        """真实生成一个镜头。冻结在提交前；失败退回冻结；返回是否成功。"""
+        """真实生成一个镜头。
+        能力口径：
+        - 第 6 步「生成画面」用 image 能力（图片模型），这与界面语义一致，
+          也让只配了文字+图片模型的用户能把流程走完；
+        - 若项目已有视频素材能力（配了视频模型），可以按 video 能力生成视频镜头。
+        计费口径（与 schema 注释一致）：
+        - proxy（平台代采）→ 提交前冻结平台额度，成功结算、失败全额退回；
+        - owned（自带密钥）/ local（本机模型）→ **不消耗平台额度**，
+          用户直接用自己的厂商账号付费，这里只记用量事件。
+          过去无论来源都扣平台额度，导致用自己密钥的用户被假额度卡住。
+        """
         item.status = "running"
-        route = self.registry.route("video", "key" if idx % 2 == 0 else "transition")
+        ability = item.ability or "image"
+        route = self.registry.route(ability, "key" if idx % 2 == 0 else "transition")
         if not route:
             item.status = "failed"
-            item.fail_reason = "no_provider_configured"
+            item.fail_reason = f"no_provider_configured:{ability}"
+            batch.fatal_reason = (
+                f"还没有配置{'图片' if ability == 'image' else '视频'}模型，"
+                "请到「设置」里填好并点「测试连接」通过后再生成。"
+            )
             return False
         provider = self.registry.get(route.provider_id)
         if provider is None:
             item.status = "failed"
             item.fail_reason = "provider_missing"
             return False
-        freeze_id = self.ledger.freeze(PRICE_PER_SHOT, batch.project_id, route.provider_id, "video")
-        batch.freeze_ids[item.shot_id] = freeze_id
+        unit_price = price_for(ability)
+        consumes_credits = route.source == "proxy"
+        freeze_id = ""
+        if consumes_credits:
+            try:
+                freeze_id = self.ledger.freeze(unit_price, batch.project_id, route.provider_id, ability)
+            except InsufficientCredits as exc:
+                # 额度不足：明确失败，不要重试（重试也还是不够），更不要伪造画面
+                item.status = "failed"
+                item.fail_reason = str(exc)[:80] or "insufficient_credits"
+                item.auto_retry_left = 0
+                return False
+            batch.freeze_ids[item.shot_id] = freeze_id
         try:
-            task_id = await provider.submit(
-                VideoGenRequest(prompt=item.scene_desc, duration_s=5, ratio="9:16")
-            )
+            prompt = await self._prompt_for(batch.project_id, item.scene_desc)
+            if ability == "image":
+                task_id = await provider.submit(
+                    ImageGenRequest(prompt=prompt, size="1024x1536")
+                )
+            else:
+                task_id = await provider.submit(
+                    VideoGenRequest(prompt=prompt, duration_s=5, ratio="9:16")
+                )
             result: GenResult | None = None
             for _ in range(POLL_MAX_ROUNDS):
                 await self._wait_pause(batch)
@@ -160,30 +262,40 @@ class GenerationManager:
                 reason = result.fail_reason if result else "no_result"
                 raise RuntimeError(reason or "provider_error")
             # 真实成功：按厂商回报的用量结算，落真实素材引用
-            item.cost = result.raw_cost_estimate or PRICE_PER_SHOT
+            item.cost = result.raw_cost_estimate or unit_price
             item.status = "done"
             item.asset_ref = result.asset_ref
-            self.ledger.settle(freeze_id, item.cost, True)
+            if freeze_id:
+                self.ledger.settle(freeze_id, item.cost, True)
             self.db.insert("usage_events", {
                 "id": ulid(), "ts": utc_now(), "project_id": batch.project_id,
                 "provider_id": route.provider_id, "source": route.source,
-                "ability": "video", "units": 5.0, "credits_spent": item.cost,
+                "ability": ability, "units": 1.0 if ability == "image" else 5.0,
+                # 自带密钥/本地模型：实扣平台积分恒为 0，只留成本估算
+                "credits_spent": item.cost if consumes_credits else 0.0,
                 "raw_cost_estimate": item.cost, "ok": 1,
             })
             # 素材落库：批次只存在于内存，刷新页面后第 7 步会看不到任何画面。
             # 这里把真实产物登记进 assets，项目详情就能按项目读回真实素材。
             if item.asset_ref:
-                try:
-                    self.db.insert("assets", {
-                        "id": ulid(), "project_id": batch.project_id, "kind": "shot",
-                        "local_path": item.asset_ref, "sha256": "pending", "size_bytes": 0,
-                    })
-                except Exception:  # noqa: BLE001 - 登记失败不影响已完成的生成
-                    pass
+                self._register_asset(batch.project_id, item)
             return True
         except Exception as exc:  # noqa: BLE001 - 任何 Provider 异常都退回冻结
             reason = str(exc)[:60] or "provider_error"
-            self.ledger.settle(freeze_id, 0, False, reason)
+            if freeze_id:
+                self.ledger.settle(freeze_id, 0, False, reason)
+            # 厂商根本不支持这个能力（端点不存在 / 方法不允许）：
+            # 立刻停批并说清楚原因，别把 12 个镜头逐个撞一遍墙还只给一句"失败"。
+            if _is_capability_error(reason):
+                item.status = "failed"
+                item.fail_reason = reason
+                item.auto_retry_left = 0
+                batch.fatal_reason = (
+                    f"厂商不支持这个能力：{reason}。"
+                    "请检查「设置」里这一项填的模型是否真的支持该能力"
+                    "（例如图片模型不能用来生成视频）。"
+                )
+                return False
             if item.auto_retry_left > 0:
                 item.auto_retry_left -= 1
                 item.fail_reason = f"retryable: {reason}"
@@ -192,10 +304,39 @@ class GenerationManager:
             item.status = "failed"
             item.fail_reason = reason
             return False
+    def _register_asset(self, project_id: str, item: ShotProgress) -> None:
+        """把生成的画面/视频取回本机并登记 assets 表。
+        厂商给的是带签名、会过期的链接；不落地的话项目过一晚全是裂图。
+        下载失败不阻塞生成（链接仍可临时查看），但会如实记录。
+        """
+        remote = item.asset_ref or ""
+        looks_video = remote.lower().split("?")[0].endswith((".mp4", ".mov", ".webm"))
+        # kind 区分素材用途：character=定妆图（第 3 步），shot=镜头画面（第 7 步看成片）
+        kind = "video" if looks_video else "shot"
+        local_path = ""
+        asset_id = ""
+        if self.assets is not None and remote:
+            asset = self.assets.save_remote(project_id, kind, remote)
+            if asset:
+                local_path = asset["local_path"]
+                asset_id = asset["id"]
+        try:
+            self.db.insert("assets", {
+                "id": asset_id or ulid(), "project_id": project_id,
+                "kind": kind,
+                "local_path": local_path or remote, "sha256": "pending", "size_bytes": 0,
+            })
+        except Exception:  # noqa: BLE001 - 登记失败不影响已完成的生成
+            pass
     async def _run(self, batch: Batch) -> None:
         """逐镜头真实推进。每次重试切换候选 Provider，不用同一家重复撞墙。"""
         try:
             for idx, item in enumerate(batch.items):
+                if batch.fatal_reason:
+                    # 致命原因已出现：剩下的镜头直接标记为未执行，不再消耗额度
+                    item.status = "failed"
+                    item.fail_reason = "skipped: " + (batch.fatal_reason or "")
+                    continue
                 await self._wait_pause(batch)
                 attempts = 0
                 while attempts < 3:

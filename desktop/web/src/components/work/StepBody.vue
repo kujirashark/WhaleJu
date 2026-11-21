@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useGenStore } from '@/stores/gen'
@@ -17,15 +17,20 @@ const done = computed(() => gen.done)
 const script = computed(() => project.script)
 const shots = computed(() => project.shots)
 const firstAsset = computed(() => {
-  // 优先用引擎里落库的素材（刷新后仍在），其次用本批次内存态
-  const persisted = project.assets.find((a: any) => a.url)
-  if (persisted) return persisted.url.startsWith('http') ? persisted.url : engine.base + persisted.url
+  // 优先用引擎里落库的**镜头画面**（第 6 步生成的那些），定妆图不算成片画面
+  const persisted = project.assets.find((a: any) => a.url && a.kind === 'shot')
+    || project.assets.find((a: any) => a.url && a.kind !== 'character')
+  if (persisted) return project.assetUrl(persisted.url)
   const live = gen.items.find((i: any) => i.status === 'done' && i.asset_ref)
   return live?.asset_ref || null
 })
 /** 第 1 步单一状态：任何时刻只呈现一种状态的信息，避免空态/忙碌/失败文案同屏打架。
  *  忙碌优先于「已有剧本」：重新生成时旧剧本还在，但界面必须显示进行中，
  *  否则用户点「重新生成这一稿」看不到任何反应。 */
+/** 角色定妆图地址：优先本机素材（永久有效），退回厂商链接（会过期）。 */
+function roleImg(r: any): string {
+  return project.assetUrl(r?.ref_url) || project.assetUrl(r?.remote_url)
+}
 const scriptState = computed<'empty' | 'busy' | 'error' | 'done'>(() => {
   if (project.contentBusy) return 'busy'
   if (script.value?.episodes?.length) return 'done'
@@ -44,8 +49,19 @@ const hasMaterial = computed(() =>
 )
 /** 是否有可展示的模型调用日志 */
 const hasCallLog = computed(() => calls.live.length > 0)
+/** 本机能力（导出 mp4 需要 ffmpeg）：导出前要提前告诉用户 */
+const sys = reactive({ ffmpeg: true })
+async function loadSystem() {
+  const r = await engine.api<{ ffmpeg: boolean }>('/api/system/capabilities')
+  if (r && typeof r.ffmpeg === 'boolean') sys.ffmpeg = r.ffmpeg
+}
 function window_open(url: string) { window.open(url, '_blank', 'noopener,noreferrer') }
-onMounted(() => project.loadDetail())
+onMounted(async () => {
+  await project.loadDetail()
+  await loadSystem()
+  // 刷新页面后恢复进行中的生成批次（进度在引擎里，不会丢）
+  if (project.currentId) await gen.restore(project.currentId)
+})
 async function doGenScript() {
   const version = project.script ? project.scriptVer + 1 : 1
   const r = await project.genScriptStream(version)
@@ -71,14 +87,16 @@ async function doConfirmOutline() {
 async function startGen() {
   const r = await gen.start(project.currentId || '', 12)
   if (r.ok) { project.goto(5); ui.toast(`已开始真实生成：${gen.routeReason || '按重要性分配'}`) }
-  else ui.toast(r.hint || r.error || '无法开始生成')
+  else ui.toast(r.error || r.hint || '无法开始生成')
 }
 async function doExport() {
   const work = await project.exportWork()
   if (work) {
     project.exp = { state: 'done', pct: 100 }
     await project.loadDetail()          // 同步最新状态（导出后项目进入已完成）
-    ui.toast('成片已存入本机作品库（AI 标识已自动写入）')
+    ui.toast(work.needs_ffmpeg
+      ? `已导出 ${work.frames} 张画面到本机作品库（本机没有 ffmpeg，装上后即可合成 mp4）`
+      : '成片已存入本机作品库（AI 标识已自动写入）')
   } else {
     project.exp = { state: 'idle', pct: 0 }
     ui.toast(engine.error || '导出失败：请确认已完成真实生成')
@@ -181,7 +199,7 @@ async function doConfirmPreview() {
             <p>由你配置的图片模型生成的定妆图，选中的会用在全部镜头里。</p>
             <div class="rolegrid">
               <div v-for="r in project.characters" :key="r.id" class="role" :class="{ sel: project.selectedRoles.has(r.id) }" @click="project.toggleRole(r.id)">
-                <img v-if="r.ref_url" :src="r.ref_url" :alt="`${r.name}的定妆图`">
+                <img v-if="roleImg(r)" :src="roleImg(r)" :alt="`${r.name}的定妆图`" loading="lazy">
                 <div v-else class="role-ph">无图</div>
                 <span class="chk"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#04121c" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
                 <span class="lab">{{ r.name }}</span>
@@ -191,7 +209,7 @@ async function doConfirmPreview() {
               <button class="btn btn-p" @click="confirmRoles">确认这 {{ project.selectedRoles.size }} 个角色</button>
               <button class="btn btn-s" :disabled="project.contentBusy" @click="project.genCharacters(5).then(r => ui.toast(r.ok ? '定妆图已重新生成' : (r.error || '生成失败')))">全部重新生成</button>
             </div>
-            <div class="note">真实定妆图由图片模型生成；返回链接type的图片会直接展示。</div>
+            <div class="note">定妆图由你配置的图片模型生成，生成后会自动存到本机，链接过期也不会变裂图。</div>
           </template>
           <template v-else>
             <p>还没有定妆图。用你在设置里配置的图片模型生成角色形象。</p>
@@ -211,7 +229,7 @@ async function doConfirmPreview() {
           <p>这 {{ project.selectedRoles.size }} 个形象会固定在镜头里。现在是：</p>
           <div class="rolegrid" style="margin-top:10px">
             <div v-for="r in project.characters.filter((c:any) => project.selectedRoles.has(c.id))" :key="r.id" class="role">
-              <img v-if="r.ref_url" :src="r.ref_url" :alt="r.name"><div v-else class="role-ph">无图</div>
+              <img v-if="roleImg(r)" :src="roleImg(r)" :alt="r.name" loading="lazy"><div v-else class="role-ph">无图</div>
               <span class="lab">{{ r.name }}{{ project.status !== 'CP2_PENDING' ? ' · 已确认' : '' }}</span>
             </div>
           </div>
@@ -243,7 +261,20 @@ async function doConfirmPreview() {
               <button class="btn btn-p" @click="startGen">按这个方案生成</button>
               <button class="btn btn-s" :disabled="project.contentBusy" @click="doGenShots">重新拆分</button>
             </div>
-            <div class="note">生成前会检查视频模型是否已配置并测通；未配置不会扣钱也不会伪造画面。</div>
+            <div class="note">
+              预计生成 {{ shots?.shots?.length || 12 }} 张画面，每张 1.5 额度，共约
+              {{ Math.round((shots?.shots?.length || 12) * 1.5 * 10) / 10 }} 额度；
+              用你自己的 API 密钥则不消耗平台额度。生成失败不计费。
+            </div>
+            <div v-if="gen.lastError" class="hint-warn">
+              <div><b>没能开始生成：</b>{{ gen.lastError }}</div>
+              <div class="acts" style="margin-top:10px">
+                <button v-if="gen.lastErrorCode === 'E2001'" class="btn btn-p" @click="ui.payOpen = true">充值额度</button>
+                <button class="btn btn-s" @click="router.push('/settings')">去设置生成视频</button>
+              </div>
+              <div v-if="gen.lastErrorHint" style="margin-top:8px">{{ gen.lastErrorHint }}</div>
+            </div>
+            <div class="note">生成前会检查对应的模型是否已配置并测通；未配置不会扣钱也不会伪造画面。</div>
           </template>
           <template v-else>
             <p>还没有镜头表。先由文本模型根据剧本拆分镜头。</p>
@@ -261,6 +292,10 @@ async function doConfirmPreview() {
         <div class="card-hd">第 6 步 · 生成画面<span class="pill" :class="gen.total && done >= gen.total ? 'p-ok' : 'p-info'">{{ done }} / {{ gen.total || '—' }}</span></div>
         <div class="card-bd">
           <p>{{ gen.total && done >= gen.total ? '镜头都好了，可以看成片。' : '生成进度全部来自本机引擎的真实任务状态。' }}</p>
+          <p v-if="gen.total" style="font-size:12px;color:var(--ink3)">
+            本批次用{{ gen.ability === 'video' ? '视频' : '图片' }}模型逐个镜头生成，
+            每镜 {{ gen.unitPrice }} 额度，共 {{ gen.estimatedCost }} 额度<template v-if="gen.billing === 'own_key'">（用你自己的密钥，不扣平台额度）</template>。
+          </p>
           <div class="progress"><i v-for="n in (gen.total || 12)" :key="n" :class="{ on: n <= done }"></i></div>
           <div style="display:flex;justify-content:space-between;align-items:baseline">
             <span class="big-num">{{ gen.total ? Math.round(done / gen.total * 100) : 0 }}%</span>
@@ -280,7 +315,22 @@ async function doConfirmPreview() {
               </tr>
             </tbody>
           </table>
+          <div v-if="gen.fatalReason" class="hint-warn">
+            <div><b>生成已停下：</b>{{ gen.fatalReason }}</div>
+            <div class="acts" style="margin-top:10px">
+              <button class="btn btn-p" @click="router.push('/settings')">去设置生成视频</button>
+            </div>
+            <div style="margin-top:8px">剩下的镜头没有执行，也没有扣任何额度。</div>
+          </div>
           <div v-if="gen.notStarted" class="hint-warn">还没有开始生成。请回第 5 步确认镜头后开始；这里只显示引擎的真实进度，没有演示动画。</div>
+          <div v-if="gen.lastError" class="hint-warn">
+            <div><b>生成没跑起来：</b>{{ gen.lastError }}</div>
+            <div class="acts" style="margin-top:10px">
+              <button v-if="gen.lastErrorCode === 'E2001'" class="btn btn-p" @click="ui.payOpen = true">充值额度</button>
+              <button class="btn btn-s" @click="router.push('/settings')">去设置生成视频</button>
+            </div>
+            <div v-if="gen.lastErrorHint" style="margin-top:8px">{{ gen.lastErrorHint }}</div>
+          </div>
           <div class="acts">
             <template v-if="!gen.total">
               <button class="btn btn-p" @click="project.goto(4)">回上一步开始生成</button>
@@ -293,7 +343,7 @@ async function doConfirmPreview() {
               <button class="btn btn-p" @click="project.goto(6)">看成片</button>
             </template>
           </div>
-          <div class="note">关掉窗口不会丢进度，下次打开从这一格继续。没有"跳过等待"——真实任务无法伪造完成。</div>
+          <div class="note">生成在本机引擎里进行，关掉页面不会中断；引擎重启后需要重新生成，已经做好的画面仍然在。</div>
         </div>
       </template>
       <!-- 第 7 步：素材取自引擎 assets（刷新后仍在），不是内存态 -->
@@ -311,7 +361,7 @@ async function doConfirmPreview() {
               <button v-if="project.status === 'CP3_PENDING'" class="btn btn-p" @click="doConfirmPreview">确认这一版，导出整集</button>
               <button v-else class="btn btn-p" @click="project.goto(7)">这一版已确认，去导出</button>
             </div>
-            <div class="note">画面来自你配置的视频模型；没有真实素材时不会显示任何示例画面。</div>
+            <div class="note">画面来自你配置的图片模型；没有真实素材时不会显示任何示例画面。</div>
           </template>
           <template v-else>
             <p>还没有真实画面。需要先在第 6 步完成生成，模型返回素材后这里才会显示。</p>
@@ -329,6 +379,10 @@ async function doConfirmPreview() {
           <p>导出设置好就可以发。默认竖屏，带字幕和 AI 生成标识。</p>
           <div v-if="!hasMaterial" class="hint-warn" style="margin-top:12px">
             还没有真实画面可导出。完成第 6 步生成后，这里才能导出成片。
+          </div>
+          <div v-if="hasMaterial && sys.ffmpeg === false" class="hint-warn" style="margin-top:12px">
+            本机没有可用的 ffmpeg：画面能正常生成，但导出 mp4 需要它。装好 ffmpeg 后再点导出；
+            或在「设置 → 生成视频」配置视频模型，直接生成视频素材。
           </div>
           <div style="margin-top:12px;display:flex;flex-direction:column;gap:7px">
             <div class="ch" :class="{ sel: project.ratio === 'v' }" @click="project.ratio = 'v'"><span class="rad"></span><div><div class="t">竖屏 1080 × 1920</div><div class="d">适合抖音、视频号</div></div><span class="pr">MP4</span></div>

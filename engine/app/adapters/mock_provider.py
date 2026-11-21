@@ -12,7 +12,10 @@ from .base import (
 class MockProvider:
     def __init__(self, meta: ProviderMeta | None = None):
         self.meta = meta or ProviderMeta(
-            id="mock", kind="mock", source="mock",
+            # source=proxy：Mock 代表"平台代采"的可控替身，计费口径与平台代采一致
+            # （自带密钥/本地模型不扣平台额度，见 workflow/generation.py）。
+            # 生产路径不注册 Mock，这里只服务测试。
+            id="mock", kind="mock", source="proxy",
             abilities=("text", "image", "video", "speech"),
         )
         self._tasks: dict[str, GenResult] = {}
