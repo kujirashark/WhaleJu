@@ -1,6 +1,7 @@
 """W1 测试：状态机、存储、计费、API 冒烟。"""
 from __future__ import annotations
 import os
+import subprocess
 import tempfile
 # 测试必须用独立临时数据目录：main.py 在 import 时就固定 DATA_DIR，
 # 否则 clean_db 夹具会清空用户真实 engine/data（配置、密钥、作品）。
@@ -318,12 +319,48 @@ def test_api_chat_and_checkpoint_endpoints():
     r = client.get("/api/checkpoints/recover", headers=HEADERS)
     assert r.status_code == 200 and "pending" in r.json()
 def test_export_forces_ai_badge():
-    """Never 层：即使 API 传 ai_badge=false，导出仍强制带标识。"""
+    """Never 层：即使 API 传 ai_badge=false，导出仍强制带标识。
+    必须用真实的视频文件：降级为"直接复制"已被移除
+    （复制出来的文件没有 AI 标识，等于给用户一条违规路径）。
+    """
     import asyncio
     from engine.app.main import PUBLISH
-    r = asyncio.run(PUBLISH.compose(str(Path(__file__).parent / "test_w1.py"), ai_badge=False))
-    assert r["ai_badged"] is True
-    Path(r["local_path"]).unlink(missing_ok=True)
+    from engine.app.publish.kit import _ffmpeg_path
+    ffmpeg = _ffmpeg_path()
+    if not ffmpeg:
+        pytest.skip("本机没有可用的 ffmpeg，跳过成片合成测试")
+    tmp = Path(__file__).parent / "_tmp_badge_src.mp4"
+    subprocess.run(
+        [ffmpeg, "-y", "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=1",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(tmp)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+    )
+    try:
+        r = asyncio.run(PUBLISH.compose(str(tmp), ai_badge=False))
+        assert r["ai_badged"] is True
+        assert r["format"] == "mp4"
+        assert Path(r["local_path"]).exists()
+        # 产物里必须真的写进了 AI 标识
+        assert Path(r["local_path"]).stat().st_size > 0
+    finally:
+        Path(r["local_path"]).unlink(missing_ok=True)
+        tmp.unlink(missing_ok=True)
+def test_compose_refuses_without_ffmpeg(monkeypatch):
+    """找不到 ffmpeg 时必须明确报错，不能降级成"复制源视频"。
+    降级复制产出的文件没有 AI 标识，发布即违规。
+    """
+    import asyncio
+    from engine.app.main import PUBLISH
+    import engine.app.publish.kit as kit
+    src = Path(__file__).parent / "_tmp_fake.mp4"
+    src.write_bytes(b"\x00" * 16)
+    monkeypatch.setattr(kit, "_ffmpeg_path", lambda: None)
+    try:
+        with pytest.raises(RuntimeError) as exc:
+            asyncio.run(PUBLISH.compose(str(src)))
+        assert "AI 生成标识" in str(exc.value)
+    finally:
+        src.unlink(missing_ok=True)
 def test_caption_has_locked_declaration():
     from engine.app.main import PUBLISH
     text = PUBLISH.caption("人的一生", 1, "测试正文")

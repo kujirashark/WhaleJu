@@ -248,15 +248,30 @@ export const useProjectStore = defineStore('project', () => {
       }
     }, 180)
   }
+  /** 导出产物信息（真实结果，不是进度假动画）。 */
+  const expResult = ref<{
+    work_id?: string; format?: string; size_bytes?: number; frames?: number
+    needs_ffmpeg?: boolean; reason?: string; download_url?: string; ratio?: string
+  } | null>(null)
   async function exportWork(): Promise<any | null> {
     if (!currentId.value) return null
-    return engine.api(`/api/projects/${currentId.value}/export`, {
-      method: 'POST',
-      body: { ratio: ratio.value === 'v' ? '9:16' : '16:9', with_subtitle: true, ai_badge: true },
-    })
+    exp.value = { state: 'running', pct: 0 }
+    try {
+      const r = await engine.api(`/api/projects/${currentId.value}/export`, {
+        method: 'POST',
+        body: { ratio: ratio.value === 'v' ? '9:16' : '16:9', with_subtitle: true, ai_badge: true },
+      })
+      expResult.value = r || null
+      exp.value = { state: 'done', pct: 100 }
+      return r
+    } catch (e) {
+      exp.value = { state: 'idle', pct: 0 }
+      expResult.value = null
+      throw e
+    }
   }
   return {
-    currentId, step, tab, scriptVer, selectedRoles, locked, ratio, player, exp, projects,
+    currentId, step, tab, scriptVer, selectedRoles, locked, ratio, player, exp, expResult, projects,
     detail, script, shots, characters, contentBusy, contentError, streamText,
     status, assets, maxStep, assetUrl,
     goto, confirmStep, create, loadProjects, loadDetail, remove, loadTrash, restore,

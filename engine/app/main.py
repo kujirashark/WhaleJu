@@ -446,7 +446,7 @@ class ExportReq(BaseModel):
     ai_badge: bool = True   # 服务端恒置 true，传 false 被忽略（Never 层）
     source_path: str | None = None  # W4：测试用本地素材路径；生产由镜头产物拼接
 @app.post("/api/projects/{pid}/export", dependencies=[Depends(auth)])
-async def export_project(pid: str, req: ExportReq):
+async def export_project(pid: str, req: ExportReq, request: Request = None):
     p = DB.get("projects", pid)
     if not p:
         raise HTTPException(404, "项目不存在")
@@ -455,8 +455,15 @@ async def export_project(pid: str, req: ExportReq):
     # 两者都没有 → 明确拒绝（409），绝不生成任何演示片。
     src = req.source_path
     result: dict | None = None
+    # 同一项目复用同一个 work_id：反复点"重新导出"只更新同一件作品，
+    # 不会再在作品库里堆出一堆几十 MB 的重复副本。
+    existing = DB.list(
+        "SELECT * FROM assets WHERE project_id=? AND kind='work' ORDER BY created_at DESC",
+        (pid,),
+    )
+    work_id = existing[0]["id"] if existing else ""
     if src and Path(src).exists():
-        result = await PUBLISH.compose(src, ai_badge=True)  # 强制 true，忽略 req.ai_badge
+        result = await PUBLISH.compose(src, work_id=work_id or None, ai_badge=True)
     else:
         videos = [
             ASSETS.resolve(r["local_path"]) for r in DB.list(
@@ -465,7 +472,7 @@ async def export_project(pid: str, req: ExportReq):
             ) if ASSETS.resolve(r["local_path"]).exists()
         ]
         if videos:
-            result = await PUBLISH.compose(videos[0], ai_badge=True)
+            result = await PUBLISH.compose(videos[0], work_id=work_id or None, ai_badge=True)
         else:
             frames = [
                 ASSETS.resolve(r["local_path"]) for r in DB.list(
@@ -482,19 +489,39 @@ async def export_project(pid: str, req: ExportReq):
                 })
             try:
                 result = await PUBLISH.compose_slides(
-                    frames, seconds_per_image=2.0, ratio=req.ratio or "9:16",
+                    frames, work_id=work_id or None,
+                    seconds_per_image=2.0, ratio=req.ratio or "9:16",
                 )
             except RuntimeError as exc:
                 # 没有 ffmpeg 时不硬堵死：把画面素材包导出到作品库，
                 # 用户装了 ffmpeg 后可以自行合成，成果不会丢。
-                result = PUBLISH.export_frames(frames, project_id=pid, project_name=p.get("name") or "未命名项目")
-    DB.insert("assets", {
+                result = PUBLISH.export_frames(
+                    frames, project_id=pid,
+                    project_name=p.get("name") or "未命名项目",
+                    work_id=work_id or None,
+                )
+                result["needs_ffmpeg"] = True
+                result["reason"] = str(exc)[:120]
+    # 库里统一存相对数据目录的路径（绝对路径会随迁移失效）
+    rel_path = ASSETS.rel_path(result["local_path"])
+    row = {
         "id": result["work_id"], "project_id": pid, "kind": "work",
-        "local_path": result["local_path"], "sha256": "pending",
+        "local_path": rel_path, "sha256": "pending",
         "size_bytes": result["size_bytes"],
-    })
+    }
+    if existing:
+        DB.execute(
+            "UPDATE assets SET local_path=?, size_bytes=? WHERE id=?",
+            (rel_path, result["size_bytes"], result["work_id"]),
+        )
+    else:
+        DB.insert("assets", row)
     DB.execute("UPDATE projects SET status='DELIVER' WHERE id=?", (pid,))
-    return result
+    out = dict(result)
+    out["local_path"] = rel_path
+    out["download_url"] = f"/api/works/{result['work_id']}/download?token={LOCAL_TOKEN}"
+    out["format"] = result.get("format") or ("frames" if result.get("needs_ffmpeg") else "mp4")
+    return out
 @app.get("/api/calls", dependencies=[Depends(auth)])
 def list_calls(limit: int = 60):
     """最近的模型调用记录：让模型调用不再是黑盒。"""
@@ -524,7 +551,43 @@ def list_works():
     for it in items:
         p = DB.get("projects", it.get("project_id"))
         it["project_name"] = p["name"] if p else "未命名项目"
+        # 真实产物形态：mp4 成片，还是没合成成功的画面素材包
+        path = ASSETS.resolve(it.get("local_path") or "")
+        is_dir = path.is_dir()
+        it["format"] = "frames" if is_dir else "mp4"
+        it["is_dir"] = is_dir
+        it["frames"] = (
+            len([f for f in path.iterdir()
+                 if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")])
+            if is_dir else 0
+        )
+        it["exists"] = path.exists()
+        it["download_url"] = f"/api/works/{it['id']}/download?token={LOCAL_TOKEN}"
     return {"items": items}
+@app.get("/api/works/{work_id}/download")
+def download_work(work_id: str, token: str | None = None):
+    """下载成片。
+    <a download> 不能带自定义请求头，所以这里用查询参数校验本地令牌。
+    """
+    if token != LOCAL_TOKEN:
+        raise HTTPException(401, "令牌无效")
+    work = DB.get("assets", work_id)
+    if not work or work["kind"] != "work":
+        raise HTTPException(404, "作品不存在")
+    path = ASSETS.resolve(work.get("local_path") or "")
+    if not path.exists():
+        raise HTTPException(404, "成片文件已被移动或删除，请重新导出")
+    if path.is_dir():
+        # 素材包：给一个 zip，下载体验和成片一致
+        import zipfile
+        zip_path = path.parent / f"{path.name}.zip"
+        if not zip_path.exists():
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for f in path.iterdir():
+                    if f.is_file():
+                        zf.write(f, f.name)
+        return FileResponse(zip_path, media_type="application/zip", filename=f"{path.name}.zip")
+    return FileResponse(path, media_type="video/mp4", filename=path.name)
 @app.get("/api/works/{work_id}/caption", dependencies=[Depends(auth)])
 def work_caption(work_id: str, body: str = ""):
     work = DB.get("assets", work_id)
@@ -536,12 +599,17 @@ def work_caption(work_id: str, body: str = ""):
 @app.get("/api/system/capabilities", dependencies=[Depends(auth)])
 def system_capabilities():
     """本机能力自检：导出成片需要 ffmpeg，没有要提前告诉用户。"""
-    from .publish.kit import _ffmpeg_path
+    from .publish.kit import _ffmpeg_path, _font_file
     ffmpeg = _ffmpeg_path()
+    font = _font_file()
     return {
         "ffmpeg": bool(ffmpeg),
         "ffmpeg_path": ffmpeg,
-        "hint": None if ffmpeg else "本机没有可用的 ffmpeg：画面可以正常生成，但导出 mp4 需要它",
+        "font": bool(font),
+        "hint": None if ffmpeg else (
+            "本机没有可用的 ffmpeg：画面可以正常生成，但导出 mp4 需要它。"
+            "装好后会自动识别；如果已安装，可在系统环境变量 WHALESHARK_FFMPEG 里指定 ffmpeg.exe 的完整路径。"
+        ),
     }
 @app.get("/api/wallet", dependencies=[Depends(auth)])
 def wallet():

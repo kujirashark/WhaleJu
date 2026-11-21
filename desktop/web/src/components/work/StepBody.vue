@@ -90,17 +90,43 @@ async function startGen() {
   else ui.toast(r.error || r.hint || '无法开始生成')
 }
 async function doExport() {
-  const work = await project.exportWork()
-  if (work) {
-    project.exp = { state: 'done', pct: 100 }
-    await project.loadDetail()          // 同步最新状态（导出后项目进入已完成）
-    ui.toast(work.needs_ffmpeg
-      ? `已导出 ${work.frames} 张画面到本机作品库（本机没有 ffmpeg，装上后即可合成 mp4）`
-      : '成片已存入本机作品库（AI 标识已自动写入）')
-  } else {
-    project.exp = { state: 'idle', pct: 0 }
-    ui.toast(engine.error || '导出失败：请确认已完成真实生成')
+  try {
+    const work = await project.exportWork()
+    if (work) {
+      await project.loadDetail()          // 同步最新状态（导出后项目进入已完成）
+      ui.toast(work.needs_ffmpeg
+        ? `已导出 ${work.frames} 张画面到本机作品库（本机没找到 ffmpeg，装上后点重新导出即可合成 mp4）`
+        : `成片已生成（${prettySize(work.size_bytes)}，AI 标识已写入）`)
+    } else {
+      ui.toast(engine.error || '导出失败：请确认已完成真实生成')
+    }
+  } catch (e: any) {
+    ui.toast(e?.message || engine.error || '导出失败')
   }
+}
+/** 体积格式化：用户看得懂的 MB / GB。 */
+function prettySize(n?: number | null): string {
+  const b = Number(n || 0)
+  if (b <= 0) return '—'
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`
+  if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`
+  return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+/**
+ * 下载成片：走引擎的只读下载端点。
+ * 之前这个按钮只"打开文件夹"，用户点完什么也没拿到。
+ */
+function downloadWork() {
+  const r = project.expResult
+  if (!r?.work_id) { ui.toast('还没有可下载的成片'); return }
+  const url = `${engine.base}/api/works/${r.work_id}/download?token=${engine.token}`
+  const a = document.createElement('a')
+  a.href = url
+  a.download = ''
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  ui.toast('开始下载成片')
 }
 /** 第 7 步确认这一版：推进引擎状态（CP3_PENDING → DELIVER），再进导出。 */
 async function doConfirmPreview() {
@@ -381,25 +407,50 @@ async function doConfirmPreview() {
             还没有真实画面可导出。完成第 6 步生成后，这里才能导出成片。
           </div>
           <div v-if="hasMaterial && sys.ffmpeg === false" class="hint-warn" style="margin-top:12px">
-            本机没有可用的 ffmpeg：画面能正常生成，但导出 mp4 需要它。装好 ffmpeg 后再点导出；
-            或在「设置 → 生成视频」配置视频模型，直接生成视频素材。
+            本机没有找到可用的 ffmpeg：画面能正常生成，但合成 mp4 需要它。
+            装好后会自动识别；也可以在系统环境变量 <code>WHALESHARK_FFMPEG</code> 里
+            写上 ffmpeg.exe 的完整路径。现在导出仍可用，会给你一份画面素材包。
           </div>
           <div style="margin-top:12px;display:flex;flex-direction:column;gap:7px">
             <div class="ch" :class="{ sel: project.ratio === 'v' }" @click="project.ratio = 'v'"><span class="rad"></span><div><div class="t">竖屏 1080 × 1920</div><div class="d">适合抖音、视频号</div></div><span class="pr">MP4</span></div>
             <div class="ch" :class="{ sel: project.ratio === 'h' }" @click="project.ratio = 'h'"><span class="rad"></span><div><div class="t">横屏 1920 × 1080</div><div class="d">适合 B 站、YouTube</div></div><span class="pr">MP4</span></div>
           </div>
           <div v-if="project.exp.state === 'running'" class="progress solid" style="margin-top:16px"><i :style="{ width: `${project.exp.pct}%` }"></i></div>
+          <!-- 真实产物：格式、体积、时长都来自引擎实际写出的文件 -->
+          <div v-if="project.exp.state === 'done' && project.expResult" class="exp-card">
+            <div class="exp-hd">
+              <span class="dot" :class="project.expResult.format === 'mp4' ? 'ok' : 'warn'"></span>
+              {{ project.expResult.format === 'mp4' ? '成片已生成' : '画面素材包已导出' }}
+            </div>
+            <div class="exp-row">
+              <span>文件</span>
+              <span>{{ project.expResult.format === 'mp4' ? 'MP4 视频' : `PNG 画面 ${project.expResult.frames || 0} 张` }}</span>
+            </div>
+            <div class="exp-row">
+              <span>大小</span>
+              <span>{{ prettySize(project.expResult.size_bytes) }}</span>
+            </div>
+            <div class="exp-row">
+              <span>规格</span>
+              <span>{{ project.expResult.ratio === '16:9' ? '横屏 1920 × 1080' : '竖屏 1080 × 1920' }}</span>
+            </div>
+            <div v-if="project.expResult.needs_ffmpeg" class="exp-warn">
+              本机没找到 ffmpeg，合成 mp4 那一步跳过了 —— 给你的是原始画面 + 合成命令，
+              装好 ffmpeg 后点「重新导出」就能直接出片。
+            </div>
+          </div>
           <div class="acts">
             <button v-if="project.exp.state === 'idle'" class="btn btn-p" :disabled="!hasMaterial" @click="doExport">开始导出</button>
             <template v-if="project.exp.state === 'done'">
-              <button class="btn btn-p" @click="engine.openFolder('works'); ui.toast('已打开作品库文件夹')">下载视频</button>
+              <button class="btn btn-p" @click="downloadWork">下载成片</button>
               <button class="btn btn-s" @click="router.push('/works')">去作品库</button>
               <button class="btn btn-s" @click="doExport">重新导出</button>
+              <button class="btn btn-s" @click="engine.openFolder('works'); ui.toast('已打开作品库文件夹')">打开文件夹</button>
             </template>
             <button v-if="project.exp.state === 'running'" class="btn btn-s" disabled>导出中…</button>
             <span style="font-size:11px;color:var(--ink3);font-family:var(--mono)">只导出本机真实生成的素材</span>
           </div>
-          <div class="note">已自动加入"AI 生成"标识。没有真实素材时不会导出演示片；发布前仍需按平台要求完成备案。</div>
+          <div class="note">已自动把「AI 生成」标识烧进画面。发布前仍需按平台要求勾选 AI 生成选项并完成备案。</div>
         </div>
       </template>
     </div>

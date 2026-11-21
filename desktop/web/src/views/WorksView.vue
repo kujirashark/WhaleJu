@@ -37,6 +37,8 @@ function openWorksFolder() {
           :workId="w.id"
           :title="w.project_name || '本机成片'"
           :meta="`${size(w.size_bytes || 0)} · ${new Date(w.created_at).toLocaleString('zh-CN')} 导出`"
+          :format="w.format"
+          :frames="w.frames"
           episode="成片"
         />
       </div>

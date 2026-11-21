@@ -51,6 +51,14 @@ class AssetStore:
             return path.relative_to(self.data_dir).as_posix()
         except ValueError:
             return path.as_posix()
+    def rel_path(self, path: str | Path) -> str:
+        """对外版：把任意路径转成库内使用的相对路径。
+        存绝对路径的坏处：数据目录一迁移，库里所有素材路径集体失效。
+        """
+        p = Path(path)
+        if p.is_absolute():
+            return self._rel(p)
+        return p.as_posix()
     # ---------- 写入 ----------
     def save_bytes(
         self,

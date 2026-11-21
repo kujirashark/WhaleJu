@@ -309,3 +309,14 @@ img{display:block}
 .proj-empty .s,.works-empty .s{font-size:12px;color:var(--ink3);margin:6px 0 12px}
 .wshot-ph{width:100%;height:100%;display:grid;place-items:center;font-size:11px;color:var(--ink3)}
 .role-ph{width:100%;height:100%;display:grid;place-items:center;font-size:11px;color:var(--ink3);background:var(--panel2)}
+/* ── 导出产物卡片（真实结果，不是进度假动画）───────────────── */
+.exp-card{margin-top:14px;padding:12px 14px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+.exp-hd{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--ink);margin-bottom:9px}
+.exp-hd .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.exp-hd .dot.ok{background:var(--ok,#2fe08a);box-shadow:0 0 8px var(--ok,#2fe08a)}
+.exp-hd .dot.warn{background:var(--warn,#ffb547);box-shadow:0 0 8px var(--warn,#ffb547)}
+.exp-row{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:11.5px;padding:3px 0;color:var(--ink2)}
+.exp-row span:first-child{color:var(--ink3);font-family:var(--mono);flex-shrink:0}
+.exp-row span:last-child{text-align:right}
+.exp-warn{margin-top:9px;padding:8px 10px;background:rgba(255,181,71,.08);border-radius:6px;font-size:11px;color:var(--warn,#ffb547);line-height:1.6}
+.wtag{display:inline-block;font-size:10.5px;color:var(--warn,#ffb547);background:rgba(255,181,71,.1);border-radius:6px;padding:3px 8px;font-family:var(--mono)}
