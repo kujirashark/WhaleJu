@@ -5,7 +5,8 @@ Never 层：白名单没有 approve_checkpoint / 扣费工具。
 用户确认后执行已有业务接口；Agent 自身不执行写操作，不绕过任何检查点。
 """
 from __future__ import annotations
-from dataclasses import asdict, dataclass
+import re
+from dataclasses import asdict, dataclass, field
 from typing import Any
 ALLOWED_TOOLS = frozenset({
     "get_script", "get_shots", "get_characters",
@@ -26,8 +27,19 @@ class Intent:
     cost_impact: float
     confirm: str
     confirmed: bool = False
+    # 意图参数（如用户点名的"第几集"）。前端据此执行，不靠猜。
+    params: dict[str, Any] = field(default_factory=dict)
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+_EP_IDX = re.compile(r"第\s*(\d{1,3}|[零〇一二两三四五六七八九十]{1,3})\s*集")
+def episode_index_from_text(text: str) -> int | None:
+    """从用户话里取出"第几集"（"写第 2 集""写第二集"→2）。取不到返回 None。"""
+    m = _EP_IDX.search(text or "")
+    if not m:
+        return None
+    from ..workflow.episode_spec import cn_to_int
+    n = cn_to_int(m.group(1))
+    return n if n and n > 0 else None
 # 白话 → 结构意图（规则兜底，无需 LLM 即可离线跑通；生产由 LLM 单次调用产出同结构）
 _RULES = (
     # op 必须与 ALLOWED_TOOLS 的工具名一致（否则确认后也被白名单拒绝）
@@ -88,12 +100,18 @@ class ConversationAgent:
         op = self.classify(text)
         for keys, o, cost, action in _RULES:
             if o == op:
-                return Intent(
+                intent = Intent(
                     op=o,
                     scope=project_id or "global",
                     cost_impact=cost,
                     confirm=f"你是想{action}吗？" + (f"大约多花 {cost:.0f} 额度，继续吗？" if cost else ""),
                 )
+                # 用户点名的集号要带上：说"写第 2 集"就是第 2 集，不能被当成"下一集"
+                if o == "write_next_episode":
+                    idx = episode_index_from_text(text)
+                    if idx:
+                        intent.params["episode_index"] = idx
+                return intent
         return Intent(
             op="answer_question", scope=project_id or "global",
             cost_impact=0.0, confirm="",

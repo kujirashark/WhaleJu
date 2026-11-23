@@ -501,8 +501,11 @@ def _confirm_step_reply(project_id: str | None) -> str:
         return "现在没有需要你确认的步骤，直接说要做什么就行。"
     _step, label, nxt = target
     return f"好，确认{label}，下一步：{nxt}。"
-def _write_next_episode_reply(project_id: str | None) -> str:
-    """续写类回复：说清楚要写第几集。"""
+def _write_next_episode_reply(project_id: str | None, episode_index: int | None = None) -> str:
+    """续写类回复：说清楚要写第几集。
+    用户点名了"第 N 集"就按 N 回答（哪怕超出总集数，也要说清写不了），
+    没说才按"下一集"算。
+    """
     if not project_id:
         return "先打开一个项目，我才知道要接着写第几集。"
     p = DB.get("projects", project_id)
@@ -515,9 +518,12 @@ def _write_next_episode_reply(project_id: str | None) -> str:
             written = len((json.loads(p["script_json"]).get("episodes") or []))
         except (json.JSONDecodeError, TypeError, AttributeError):
             written = 0
-    if written >= total:
-        return f"这个项目一共 {total} 集，已经写完了。要改写可以说「重新生成这一稿」。"
-    return f"好，接着写第 {written + 1} 集（共 {total} 集）。"
+    want = int(episode_index) if episode_index else written + 1
+    if want > total:
+        return f"这个项目一共 {total} 集，写不了第 {want} 集。想改写可以说「重新生成这一稿」。"
+    if want <= written:
+        return f"第 {want} 集已经写过了（目前写了 {written} 集）。想改写可以说「重新生成这一稿」。"
+    return f"好，接着写第 {want} 集（共 {total} 集）。"
 @app.post("/api/chat/stream", dependencies=[Depends(auth)])
 async def chat_stream(req: ChatReq):
     """对话（SSE 版，设计 §6.5）：token / intent / done 三事件。
@@ -534,7 +540,7 @@ async def chat_stream(req: ChatReq):
             # 说清楚确认的是哪一步，别让用户面对一句空泛的"确认执行这一步吗？"
             reply = _confirm_step_reply(req.project_id)
         elif intent.op == "write_next_episode":
-            reply = _write_next_episode_reply(req.project_id)
+            reply = _write_next_episode_reply(req.project_id, intent.params.get("episode_index"))
         else:
             reply = intent.confirm or "确认执行这一步吗？"
         for i in range(0, len(reply), 6):

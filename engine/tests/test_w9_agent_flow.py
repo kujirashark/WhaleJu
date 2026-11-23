@@ -109,6 +109,42 @@ def test_confirm_without_project_says_so():
         events = _events("".join(r.iter_text()))
     reply = "".join(d.get("t", "") for e, d in events if e == "token")
     assert "项目" in reply, reply
+def test_write_next_episode_respects_requested_index():
+    """用户点名"第 2 集"就必须按第 2 集处理，不能当成"下一集"。"""
+    client = TestClient(app)
+    # 共三集，已写第 1 集
+    pid = client.post("/api/projects", json={"idea": "共三集短剧"}, headers=HEADERS).json()["id"]
+    DB.execute("UPDATE projects SET script_json=? WHERE id=?",
+               (json.dumps({"title": "剧", "episodes": [{"idx": 1, "title": "一", "script": "正文"}]},
+                           ensure_ascii=False), pid))
+    with client.stream("POST", "/api/chat/stream", headers=HEADERS,
+                       json={"message": "写第 2 集", "project_id": pid}) as r:
+        events = _events("".join(r.iter_text()))
+    reply = "".join(d.get("t", "") for e, d in events if e == "token")
+    assert "第 2 集" in reply, reply
+    intent = next(d for e, d in events if e == "intent")
+    assert intent["params"]["episode_index"] == 2, intent
+def test_write_next_episode_beyond_total_is_refused():
+    """1 集的项目说"写第 2 集"，必须说清写不了，而不是默默去写第 1 集。"""
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"idea": "只做一集"}, headers=HEADERS).json()["id"]
+    with client.stream("POST", "/api/chat/stream", headers=HEADERS,
+                       json={"message": "写第 2 集", "project_id": pid}) as r:
+        events = _events("".join(r.iter_text()))
+    reply = "".join(d.get("t", "") for e, d in events if e == "token")
+    assert "写不了第 2 集" in reply, reply
+def test_write_next_episode_already_written_is_refused():
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"idea": "共三集短剧"}, headers=HEADERS).json()["id"]
+    DB.execute("UPDATE projects SET script_json=? WHERE id=?",
+               (json.dumps({"title": "剧", "episodes": [
+                   {"idx": 1, "title": "一", "script": "正文"},
+                   {"idx": 2, "title": "二", "script": "正文"}]}, ensure_ascii=False), pid))
+    with client.stream("POST", "/api/chat/stream", headers=HEADERS,
+                       json={"message": "写第 2 集", "project_id": pid}) as r:
+        events = _events("".join(r.iter_text()))
+    reply = "".join(d.get("t", "") for e, d in events if e == "token")
+    assert "已经写过了" in reply, reply
 def test_answer_question_has_no_confirm_bar():
     """问答类不该弹确认条（needs_confirm=false），否则用户被无意义的确认打断。"""
     client = TestClient(app)

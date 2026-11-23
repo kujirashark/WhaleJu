@@ -14,6 +14,7 @@ export interface Intent {
   confirm: string
   confirmed: boolean
   needs_confirm?: boolean  // 问答类为 false，不弹确认条
+  params?: Record<string, any>  // 意图参数（如用户点名的"第几集"）
 }
 /** 引擎业务状态 → 需要用户确认的节点（对应引擎 steps/{n}/advance）。
  *  界面上不再放流程按钮，流程全部由对话推进，这里就是唯一的推进依据。 */
@@ -199,12 +200,17 @@ export const useAgentStore = defineStore('agent', () => {
           break
         }
         case 'write_next_episode': {
-          // 多集项目：一集一集写，省 token
+          // 多集项目：一集一集写，省 token。用户点名的集号优先
           const written = project.script?.episodes?.length || 0
           const total = Number((project.detail as any)?.episode_count || 1)
-          const idx = written + 1
+          const asked = Number(intent.params?.episode_index)
+          const idx = asked > 0 ? asked : written + 1
           if (idx > total) {
-            msg = `这个项目一共 ${total} 集，已经写完了。想改写可以说「重新生成这一稿」。`
+            msg = `这个项目一共 ${total} 集，写不了第 ${idx} 集。想改写可以说「重新生成这一稿」。`
+            break
+          }
+          if (idx <= written) {
+            msg = `第 ${idx} 集已经写过了（目前写了 ${written} 集）。想改写可以说「重新生成这一稿」。`
             break
           }
           const r = await project.genScriptStream(project.scriptVer || 1, idx)
