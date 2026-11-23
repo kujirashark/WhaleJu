@@ -23,6 +23,7 @@ from .workflow.state_machine import GuardError, WorkflowEngine
 from .workflow.checkpoints import CheckpointManager
 from .workflow.generation import GenerationManager, PRICE_PER_IMAGE, PRICE_PER_SHOT
 from .workflow.content import ContentGenerator, NoProviderError
+from .workflow.episode_spec import parse_episode_count
 from .agent.agent import ConversationAgent, Intent
 from .publish.kit import PublishKit
 DATA_DIR = Path(os.getenv("MANGJU_DATA_DIR", str(Path.cwd() / "engine" / "data")))
@@ -99,7 +100,27 @@ async def lifespan(app: FastAPI):
     recovered = CHECKPOINTS.recover()
     if recovered:
         print(f"[recover] {len(recovered)} 个检查点挂起，等待用户确认（不自动推进）")
+    _sync_episode_counts()
     yield
+def _sync_episode_counts() -> None:
+    """校准老项目的目标集数。
+    老库里没有 episode_count 这一列（迁移后默认 1），而用户的想法里可能
+    明确写了"三集"——这里按想法重新解析一次并写回，保证界面和生成提示词
+    都按用户真正要的集数来，而不是一律当成 1 集或一律 3 集。
+    """
+    try:
+        rows = DB.list("SELECT id, idea_text, episode_count FROM projects")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[episode_count] 校准失败：{exc}")
+        return
+    for r in rows:
+        want, _explicit = parse_episode_count(r.get("idea_text") or "")
+        if want != (r.get("episode_count") or 0):
+            try:
+                DB.execute("UPDATE projects SET episode_count=? WHERE id=?", (want, r["id"]))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[episode_count] 校准失败：{exc}")
+                break
 app = FastAPI(title="鲸鲨漫剧本地引擎", version="v1-w1", lifespan=lifespan)
 # 桌面壳 WebView 的 Origin（仅这三类来源 + 本机绑定 + Token 鉴权，不开放公网）
 app.add_middleware(
@@ -173,13 +194,20 @@ def local_token():
 @app.post("/api/projects", dependencies=[Depends(auth)])
 def create_project(req: CreateProject):
     pid = ulid()
+    # 集数从用户想法里解析：说了几集就几集，没说就 1 集（不写死 3）
+    count, explicit = parse_episode_count(req.idea)
     DB.insert("projects", {
         "id": pid, "name": req.idea[:18], "template_id": req.template_id,
-        "idea_text": req.idea, "status": "DRAFT",
+        "idea_text": req.idea, "status": "DRAFT", "episode_count": count,
     })
-    for i in (1, 2, 3):
+    for i in range(1, count + 1):
         DB.insert("episodes", {"id": ulid(), "project_id": pid, "idx": i, "status": "pending"})
-    return {"id": pid, "name": req.idea[:18], "status": "DRAFT", "episode_count": 3, "next_action": "draft_script"}
+    return {
+        "id": pid, "name": req.idea[:18], "status": "DRAFT",
+        "episode_count": count,
+        "episode_count_explicit": explicit,
+        "next_action": "draft_script",
+    }
 @app.get("/api/projects", dependencies=[Depends(auth)])
 def list_projects():
     return {"items": DB.list("SELECT * FROM projects WHERE deleted_at IS NULL ORDER BY updated_at DESC")}
@@ -268,15 +296,35 @@ def get_project(pid: str, request: Request):
     }
 class ScriptGenReq(BaseModel):
     version: int = Field(default=1, ge=1, le=99)
+    # 只写第几集：留空=按项目目标集数整批写；给值=只写这一集（逐集推进，省 token）
+    episode_index: int | None = Field(default=None, ge=1, le=99)
+def _target_episode_count(p: dict) -> int:
+    """项目目标集数（建项目时按用户想法解析的，不写死 3）。"""
+    try:
+        n = int(p.get("episode_count") or 1)
+    except (TypeError, ValueError):
+        n = 1
+    return n if n > 0 else 1
+def _episode_index_error(p: dict, episode_index: int | None) -> str | None:
+    """要写的集超出目标集数时给出明确原因（空串=允许）。"""
+    if not episode_index:
+        return None
+    total = _target_episode_count(p)
+    if episode_index > total:
+        return f"这个项目一共 {total} 集，不能写第 {episode_index} 集。"
+    return None
 @app.post("/api/projects/{pid}/script/generate", dependencies=[Depends(auth)])
 async def generate_script(pid: str, req: ScriptGenReq = ScriptGenReq()):
     """用已配置的文本模型真实生成剧本；未配置则明确拒绝。"""
     p = DB.get("projects", pid)
     if not p:
         raise HTTPException(404, "项目不存在")
+    bad = _episode_index_error(p, req.episode_index)
+    if bad:
+        raise HTTPException(400, {"code": "E4005", "message": bad, "hint": "先改项目想法里的集数，或直接重新生成整稿"})
     ensure_providers("text")
     try:
-        result = await CONTENT.generate_script(pid, p["idea_text"], req.version)
+        result = await CONTENT.generate_script(pid, p["idea_text"], req.version, req.episode_index)
         advance_status(pid, "script_ready")   # DRAFT → CP1_PENDING（等你确认剧本）
         return result
     except NoProviderError as exc:
@@ -297,8 +345,17 @@ async def generate_script_stream(pid: str, req: ScriptGenReq = ScriptGenReq()):
     ensure_providers("text")
     async def events():
         yield "event: stage\ndata: " + json.dumps({"text": "已连接文本模型，正在生成剧本（若厂商限流会自动重试，请稍候）…"}, ensure_ascii=False) + "\n\n"
+        bad = _episode_index_error(p, req.episode_index)
+        if bad:
+            # 集数越界要说清楚，不能让界面只看到一个空流
+            yield "event: error\ndata: " + json.dumps(
+                {"message": bad, "hint": "先改项目想法里的集数，或直接重新生成整稿"}, ensure_ascii=False
+            ) + "\n\n"
+            return
         try:
-            async for kind, value in CONTENT.stream_script(pid, p["idea_text"], req.version):
+            async for kind, value in CONTENT.stream_script(
+                pid, p["idea_text"], req.version, req.episode_index
+            ):
                 if kind == "token":
                     yield "event: token\ndata: " + json.dumps({"t": value}, ensure_ascii=False) + "\n\n"
                 elif kind == "call":

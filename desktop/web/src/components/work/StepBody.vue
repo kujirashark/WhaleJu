@@ -56,11 +56,22 @@ const archiveTitle = computed(() => {
   const m = project.lastStream.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"/)
   return m ? m[1] : ''
 })
-/** 一共要写几集（优先用已有剧本的集数） */
-const totalEpisodes = computed(() => {
-  const n = script.value?.episodes?.length
-  return n && n > 0 ? n : Math.max(liveEps.value.length, 3)
+/** 项目目标集数：引擎按用户想法解析出来的（没说集数就是 1 集），界面不能写死 3 */
+const targetEpisodes = computed(() => {
+  const n = Number((project.detail as any)?.episode_count || 0)
+  if (n > 0) return n
+  return script.value?.episodes?.length || 1
 })
+/** 已经写好的集数 */
+const writtenEpisodes = computed(() => script.value?.episodes?.length || 0)
+/** 下一集该写第几集（逐集推进） */
+const nextEpisodeIndex = computed(() => writtenEpisodes.value + 1)
+/** 还有没有下一集要写 */
+const canWriteMore = computed(() => nextEpisodeIndex.value <= targetEpisodes.value)
+/** 一共要写几集（生成过程中的进度条也要按真实集数） */
+const totalEpisodes = computed(() =>
+  Math.max(targetEpisodes.value, liveEps.value.length, writtenEpisodes.value, 1),
+)
 /** 阶段标题：正在写第几集、叫什么 */
 const liveStageTitle = computed(() => {
   const cur = liveEps.value[liveEps.value.length - 1]
@@ -140,6 +151,16 @@ async function doGenScript() {
   const version = project.script ? project.scriptVer + 1 : 1
   const r = await project.genScriptStream(version)
   if (r.ok) ui.toast('剧本已由你配置的模型生成并保存到本机')
+  else ui.toast(r.error || '生成失败，请检查文本模型配置')
+}
+/**
+ * 继续写下一集：一集一集做，省 token 也少被限流截断。
+ * 同一稿（version 不变），只是把第 N 集补上。
+ */
+async function doGenNextEpisode() {
+  const idx = nextEpisodeIndex.value
+  const r = await project.genScriptStream(project.scriptVer || 1, idx)
+  if (r.ok) ui.toast(`第 ${idx} 集已写好并保存到本机`)
   else ui.toast(r.error || '生成失败，请检查文本模型配置')
 }
 async function doGenShots() {
@@ -288,7 +309,10 @@ async function doConfirmPreview() {
           </template>
           <!-- 空态：一句话说明 + 一个主动作 -->
           <template v-else-if="scriptState === 'empty'">
-            <p>根据这个项目想法，用你配置的文本模型写一部 3 集竖屏短剧。</p>
+            <p>
+              根据这个项目想法，用你配置的文本模型写一部
+              <b>{{ targetEpisodes }} 集</b>竖屏短剧<template v-if="targetEpisodes > 1">（一次写一集，省额度也少被限流）</template>。
+            </p>
             <div class="acts">
               <button class="btn btn-p" @click="doGenScript">用我的模型生成剧本</button>
               <button class="btn btn-s" @click="router.push('/settings')">配置模型</button>
@@ -302,7 +326,13 @@ async function doConfirmPreview() {
               模型这次写到一半就断了，已保住写完的 {{ script.episodes.length }} 集。
               点「重新生成」可以再试一次。
             </div>
-            <p>第 {{ scriptVerText }} 稿已写好，共 {{ script.episodes.length }} 集，已保存到本机。</p>
+            <p>
+              第 {{ scriptVerText }} 稿已写好，
+              <template v-if="targetEpisodes > 1">
+                已写 <b>{{ writtenEpisodes }}</b> / {{ targetEpisodes }} 集，已保存到本机。
+              </template>
+              <template v-else>共 {{ writtenEpisodes }} 集，已保存到本机。</template>
+            </p>
             <!-- 刚生成的过程可回看：用户能确认模型确实写了一篇完整稿 -->
             <details v-if="project.lastStream" class="stream-archive">
               <summary>看看模型刚才是怎么写出来的</summary>
@@ -325,6 +355,10 @@ async function doConfirmPreview() {
             </div>
             <div class="acts">
               <button class="btn btn-p" @click="project.goto(1)">确认这一稿，看大纲</button>
+              <!-- 一集一集写：省 token，少被限流 -->
+              <button v-if="canWriteMore" class="btn btn-p" :disabled="project.contentBusy" @click="doGenNextEpisode">
+                {{ project.contentBusy ? '正在写…' : `继续写第 ${nextEpisodeIndex} 集` }}
+              </button>
               <button class="btn btn-s" :disabled="project.contentBusy" @click="doGenScript">
                 {{ project.contentBusy ? '正在重写…' : '重新生成这一稿' }}
               </button>

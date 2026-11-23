@@ -188,7 +188,7 @@ def test_generation_self_heals_stale_registry(monkeypatch):
     assert REGISTRY.has_ability("text") is False
     # monkeypatch 文本生成，验证自愈后确实走到了业务调用
     calls = []
-    async def fake_script(pid, idea, version=1):
+    async def fake_script(pid, idea, version=1, episode_index=None):
         calls.append(pid)
         return {"title": "ok", "episodes": []}
     monkeypatch.setattr(main_mod.CONTENT, "generate_script", fake_script)

@@ -33,7 +33,10 @@ async function create() {
       project.goto(0)
       // 跳真实项目 ID：/p/current 是占位路由，会让 WorkbenchView 拿不到 currentId
       router.push(`/p/${project.currentId}`)
-      ui.toast('项目已保存到本机，开始写第一稿')
+      const n = project.createdEpisodeCount || 1
+      ui.toast(n > 1
+        ? `项目已保存到本机，按你说的 ${n} 集开工（一集一集写，省额度）`
+        : '项目已保存到本机，开始写第一稿')
     } else {
       // 说清真实原因，并提示"可能已经建出来了" ——
       // 引擎在写库后被重启时会出现"实际成功、界面报失败"。
@@ -48,7 +51,7 @@ defineExpose({ idea })
 </script>
 <template>
   <div class="home-box">
-    <textarea v-model="idea" rows="2" placeholder="例如：讲一个普通人的一生，从八岁到七十岁，三集竖屏短剧" aria-label="描述你想做的剧"></textarea>
+    <textarea v-model="idea" rows="2" placeholder="例如：深夜便利店连续出现同一张脸，悬疑反转（不说集数就按一集做）" aria-label="描述你想做的剧"></textarea>
     <div class="home-box-ft">
       <div class="chips">
         <button class="chip" :class="{ 'c-run': idea === TEMPLATES.life }" @click="fill('life')">普通人的一生</button>

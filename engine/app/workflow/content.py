@@ -29,10 +29,10 @@ class ContentGenerator:
         if not provider:
             raise NoProviderError("文本模型当前不可用，请重新测试连接")
         return provider
-    async def _ask(self, prompt: str, system: str) -> str:
+    async def _ask(self, prompt: str, system: str, max_tokens: int = 2048) -> str:
         provider = self._provider()
         import asyncio
-        tid = await provider.submit(TextGenRequest(prompt=prompt, system=system, max_tokens=2048))
+        tid = await provider.submit(TextGenRequest(prompt=prompt, system=system, max_tokens=max_tokens))
         result = await provider.poll(tid)
         if not result.ok:
             raise NoProviderError(f"文本模型生成失败：{result.fail_reason or '未知错误'}")
@@ -42,18 +42,75 @@ class ContentGenerator:
             raise NoProviderError("文本模型没有返回内容")
         return content
     @staticmethod
-    def _script_prompt(idea: str) -> tuple[str, str]:
-        system = (
-            "你是短剧编剧。只输出 JSON，不要输出其他文字。格式："
+    def _script_prompt(
+        idea: str,
+        total: int = 1,
+        episode_index: int | None = None,
+        prev: list[dict] | None = None,
+    ) -> tuple[str, str]:
+        """构造剧本提示词。
+        集数由用户想法解析而来（没说就 1 集），绝不写死 3 集。
+        episode_index 不为空时只写这一集 —— 一集一集做，省 token、也少被限流截断。
+        """
+        total = max(1, int(total or 1))
+        fmt = (
             '{"title":"剧名","episodes":[{"idx":1,"title":"集标题","tags":["标签"],"script":"本集正文"}]}'
-            "。写 3 集，每集一个明确的人生阶段，正文 150-250 字，语言口语化。"
         )
-        return system, f"根据用户想法写一部 3 集竖屏短剧。用户想法：{idea}"
-    def _save_script(self, project_id: str, idea: str, version: int, raw: str) -> dict:
+        if episode_index:
+            system = (
+                "你是短剧编剧。只输出 JSON，不要输出其他文字。格式：" + fmt +
+                f"。这次只写第 {episode_index} 集（共 {total} 集），"
+                f'episodes 数组里只放这一个元素，"idx" 填 {episode_index}。'
+                "正文 300-500 字，语言口语化，结尾留一个钩子。"
+            )
+            prompt = f"为一部 {total} 集竖屏短剧写第 {episode_index} 集。用户想法：{idea}"
+            if prev:
+                brief = "；".join(
+                    f"第 {p.get('idx')} 集《{p.get('title') or ''}》{(p.get('script') or '')[:120]}"
+                    for p in prev
+                )
+                prompt += f"。前面已经写好的剧情：{brief}。请接着往下写，不要重复前面的情节。"
+            return system, prompt
+        system = (
+            "你是短剧编剧。只输出 JSON，不要输出其他文字。格式：" + fmt +
+            f"。写 {total} 集，每集一个明确的人生阶段，正文 150-250 字，语言口语化。"
+        )
+        return system, f"根据用户想法写一部 {total} 集竖屏短剧。用户想法：{idea}"
+    @staticmethod
+    def _script_budget(total: int, episode_index: int | None = None) -> int:
+        """max_tokens 预算：一集一集写时只给一集的量，别浪费。"""
+        if episode_index:
+            return 1600
+        return max(1200, min(4096, 1400 * max(1, int(total or 1))))
+    def _load_script(self, project_id: str) -> dict:
+        with self.db.read() as c:
+            row = c.execute("SELECT script_json FROM projects WHERE id=?", (project_id,)).fetchone()
+        try:
+            return json.loads(row["script_json"]) if row and row["script_json"] else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    def _save_script(
+        self,
+        project_id: str,
+        idea: str,
+        version: int,
+        raw: str,
+        episode_index: int | None = None,
+    ) -> dict:
         data, partial = self._parse_json_lenient(raw)
         episodes = data.get("episodes") or []
+        if episode_index:
+            # 逐集写作：只把这一集并进已有剧本，不动别的集
+            base = self._load_script(project_id)
+            merged = {e.get("idx") or i + 1: e for i, e in enumerate(base.get("episodes") or [])}
+            for i, e in enumerate(episodes):
+                merged[int(e.get("idx") or episode_index + i)] = e
+            episodes = [merged[k] for k in sorted(merged)]
+            title = str(base.get("title") or data.get("title") or idea[:12])
+        else:
+            title = str(data.get("title") or idea[:12])
         payload = {
-            "title": str(data.get("title") or idea[:12]),
+            "title": title,
             "episodes": episodes,
             "version": version,
             "idea": idea,
@@ -66,11 +123,36 @@ class ContentGenerator:
                 (json.dumps(payload, ensure_ascii=False), version, project_id),
             )
         return payload
-    async def generate_script(self, project_id: str, idea: str, version: int = 1) -> dict:
-        system, prompt = self._script_prompt(idea)
-        raw = await self._ask(prompt, system)
-        return self._save_script(project_id, idea, version, raw)
-    async def stream_script(self, project_id: str, idea: str, version: int = 1):
+    def _target_count(self, project_id: str, fallback: int = 1) -> int:
+        """项目目标集数：来自建项目时解析的结果，不写死。"""
+        with self.db.read() as c:
+            row = c.execute("SELECT episode_count FROM projects WHERE id=?", (project_id,)).fetchone()
+        try:
+            n = int(row["episode_count"]) if row else 0
+        except (TypeError, ValueError):
+            n = 0
+        return n if n > 0 else max(1, fallback)
+    async def generate_script(
+        self,
+        project_id: str,
+        idea: str,
+        version: int = 1,
+        episode_index: int | None = None,
+    ) -> dict:
+        total = self._target_count(project_id)
+        prev = []
+        if episode_index:
+            prev = (self._load_script(project_id).get("episodes") or [])
+        system, prompt = self._script_prompt(idea, total, episode_index, prev)
+        raw = await self._ask(prompt, system, self._script_budget(total, episode_index))
+        return self._save_script(project_id, idea, version, raw, episode_index)
+    async def stream_script(
+        self,
+        project_id: str,
+        idea: str,
+        version: int = 1,
+        episode_index: int | None = None,
+    ):
         """流式生成剧本：逐块 yield 文本增量，完整结果落库后 yield 终帧。
         yield 格式：
         - ("token", 文本片段)
@@ -81,10 +163,16 @@ class ContentGenerator:
         provider = self._provider()
         if not hasattr(provider, "stream_chat"):
             raise NoProviderError("当前模型不支持流式输出，请改用支持 OpenAI 兼容流的模型")
-        system, prompt = self._script_prompt(idea)
+        total = self._target_count(project_id)
+        prev = []
+        if episode_index:
+            prev = (self._load_script(project_id).get("episodes") or [])
+        system, prompt = self._script_prompt(idea, total, episode_index, prev)
         chunks: list[str] = []
         try:
-            async for item in provider.stream_chat(prompt, system, max_tokens=2048):
+            async for item in provider.stream_chat(
+                prompt, system, max_tokens=self._script_budget(total, episode_index)
+            ):
                 # 兼容两种 Provider：产出 ("delta", text)/("call", log) 的新版，
                 # 以及只 yield 纯文本的旧实现。
                 if isinstance(item, tuple) and item and item[0] == "call":
@@ -104,7 +192,7 @@ class ContentGenerator:
         raw = "".join(chunks)
         if not raw.strip():
             raise NoProviderError("文本模型没有返回内容")
-        yield ("done", self._save_script(project_id, idea, version, raw))
+        yield ("done", self._save_script(project_id, idea, version, raw, episode_index))
     async def generate_shots(self, project_id: str, shot_count: int = 12) -> dict:
         system = (
             "你是分镜师。只输出 JSON，不要输出其他文字。格式："

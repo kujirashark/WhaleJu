@@ -8,7 +8,7 @@ export const IMG = {
   hero: './assets/hero.jpg',
 }
 export const STEPS = [
-  { n: '写剧本', d: '3 集 · 8 个亮点' },
+  { n: '写剧本', d: '按你说的集数写' },
   { n: '确认剧本', d: '你确认后才继续' },
   { n: '角色形象', d: '5 个年龄' },
   { n: '确认角色形象', d: '必须你确认' },

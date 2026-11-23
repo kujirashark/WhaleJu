@@ -48,8 +48,9 @@ export const useProjectStore = defineStore('project', () => {
     if (/^(https?:|data:|blob:)/i.test(u)) return u
     return `${engine.base}${u.startsWith('/') ? '' : '/'}${u}`
   }
-  /** 流式生成剧本：读取 SSE 逐块更新 streamText，完成后落库结果写入 script。 */
-  async function genScriptStream(version = 1): Promise<{ ok: boolean; error?: string }> {
+  /** 流式生成剧本：读取 SSE 逐块更新 streamText，完成后落库结果写入 script。
+   *  episodeIndex：只写第几集（逐集推进，省 token）；不传则按项目目标集数整批写。 */
+  async function genScriptStream(version = 1, episodeIndex?: number | null): Promise<{ ok: boolean; error?: string }> {
     if (!currentId.value) return { ok: false, error: '没有当前项目' }
     contentBusy.value = true
     contentError.value = ''
@@ -63,7 +64,7 @@ export const useProjectStore = defineStore('project', () => {
       const res = await fetch(`${engine.base}/api/projects/${currentId.value}/script/generate/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Local-Token': engine.token },
-        body: JSON.stringify({ version }),
+        body: JSON.stringify(episodeIndex ? { version, episode_index: episodeIndex } : { version }),
       })
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
       const reader = res.body.getReader()
@@ -226,13 +227,16 @@ export const useProjectStore = defineStore('project', () => {
       return { ok: false, error: contentError.value }
     } finally { contentBusy.value = false }
   }
+  /** 最近一次创建的项目目标集数（引擎解析出来的，界面用它提示用户） */
+  const createdEpisodeCount = ref(1)
   async function create(idea: string): Promise<boolean> {
-    const r = await engine.api<{ id: string }>('/api/projects', {
+    const r = await engine.api<{ id: string; episode_count?: number }>('/api/projects', {
       method: 'POST', body: { idea, template_id: 'life_3ep' },
     })
     if (r?.id) {
       currentId.value = r.id
       step.value = 0
+      createdEpisodeCount.value = r.episode_count || 1
       return true
     }
     // 请求可能"实际成功但响应没回来"（引擎在写库后被重启/被杀，连接断掉）。
@@ -242,6 +246,7 @@ export const useProjectStore = defineStore('project', () => {
     if (hit?.id) {
       currentId.value = hit.id
       step.value = 0
+      createdEpisodeCount.value = hit.episode_count || 1
       return true
     }
     return false
@@ -322,7 +327,7 @@ export const useProjectStore = defineStore('project', () => {
   return {
     currentId, step, tab, scriptVer, selectedRoles, locked, ratio, player, exp, expResult, projects,
     detail, script, shots, characters, contentBusy, contentError, streamText, lastStream, streamStage, streamWait, partial,
-    status, assets, maxStep, assetUrl,
+    status, assets, maxStep, assetUrl, createdEpisodeCount,
     goto, confirmStep, create, loadProjects, loadDetail, remove, loadTrash, restore,
     genScript, genScriptStream, genShots, genCharacters, toggleRole,
     togglePlay, startExport, exportWork,

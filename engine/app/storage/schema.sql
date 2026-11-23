@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS projects (
   name        TEXT NOT NULL,         -- 项目名（LLM 从想法中提取，用户可改）
   template_id TEXT NOT NULL,         -- 流程模板标识；V1 固定 'life_3ep'（3集短剧），扩展题材时新增
   idea_text   TEXT NOT NULL,         -- 用户首页输入的原始一句话（不改写不清洗；审计与回归测试锚点）
+  episode_count INTEGER NOT NULL DEFAULT 1,  -- 目标集数：从 idea 解析（用户没说就 1 集），不写死 3
   status      TEXT NOT NULL,         -- 状态机当前态：DRAFT/CP1_PENDING/CHARACT/CP2_PENDING/PLANNED/RUNNING/CP3_PENDING/DELIVER
   script_json TEXT,                  -- 真实生成的剧本结构（title + episodes）；NULL=还没生成
   shots_json  TEXT,                  -- 真实生成的分镜结构（shots）；NULL=还没生成

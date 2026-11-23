@@ -33,6 +33,8 @@ class Database:
                 ("script_json", "TEXT"),
                 ("shots_json", "TEXT"),
                 ("script_ver", "INTEGER NOT NULL DEFAULT 0"),
+                # 目标集数：从用户想法解析，不再写死 3 集
+                ("episode_count", "INTEGER NOT NULL DEFAULT 1"),
             ):
                 if col not in pcols:
                     conn.execute(f"ALTER TABLE projects ADD COLUMN {col} {ddl}")
