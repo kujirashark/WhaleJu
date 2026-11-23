@@ -227,6 +227,15 @@ export const useProjectStore = defineStore('project', () => {
       step.value = 0
       return true
     }
+    // 请求可能"实际成功但响应没回来"（引擎在写库后被重启/被杀，连接断掉）。
+    // 这时界面报失败、刷新后项目却出现了 —— 必须回查确认，不能让用户以为白干了。
+    const list = await engine.api<{ items: any[] }>('/api/projects')
+    const hit = list?.items?.find((p: any) => p.idea_text === idea)
+    if (hit?.id) {
+      currentId.value = hit.id
+      step.value = 0
+      return true
+    }
     return false
   }
   async function loadProjects() {

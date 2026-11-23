@@ -15,10 +15,14 @@ export const useUiStore = defineStore('ui', () => {
     theme.value = theme.value === 'dark' ? 'light' : 'dark'
     applyTheme()
   }
-  function toast(msg: string) {
+  /**
+   * 轻提示。默认 3.2 秒；错误类应当更久 ——
+   * 2.6 秒根本来不及读完，用户只会觉得"莫名其妙闪了一下"。
+   */
+  function toast(msg: string, ms = 3200) {
     toastMsg.value = msg
     clearTimeout(toastTimer)
-    toastTimer = setTimeout(() => (toastMsg.value = ''), 2600)
+    toastTimer = setTimeout(() => (toastMsg.value = ''), ms)
   }
   function closeAll() {
     payOpen.value = false

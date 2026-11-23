@@ -64,7 +64,12 @@ class EngineClient {
     return this.ready
   }
   async api<T = any>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T | null> {
-    if (!this.online) return null
+    if (!this.online) {
+      // 必须记下原因：上层要靠它区分"引擎没连上"和"引擎没响应"，
+      // 否则所有失败都会被说成同一句"未连接或未响应"。
+      this.error = '本地引擎未连接，请先启动鲸鲨漫剧桌面应用'
+      return null
+    }
     try {
       const res = await fetch(this.base + path, {
         method: opts.method || 'GET',
@@ -92,7 +97,11 @@ class EngineClient {
       }
       return (await res.json()) as T
     } catch (e) {
-      this.error = String((e as Error).message || e)
+      const raw = String((e as Error).message || e)
+      // fetch 抛的是英文 "Failed to fetch"，直接甩给用户等于没说是哪儿错了
+      this.error = /failed to fetch|networkerror|load failed/i.test(raw)
+        ? '引擎没有响应（可能正在重启或已退出）'
+        : raw
       console.warn('[engine] API 失败:', path, this.error)
       return null
     }
