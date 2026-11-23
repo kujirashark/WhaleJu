@@ -146,7 +146,8 @@ class _EchoTextProvider:
         }, ensure_ascii=False)
         for i in range(0, len(payload), 30):
             yield ("delta", payload[i:i + 30])
-def _sse_done(text: str) -> dict:
+def _sse_all(text: str) -> list[tuple[str, dict]]:
+    out = []
     for block in text.split("\n\n"):
         ev = dt = None
         for line in block.split("\n"):
@@ -154,9 +155,33 @@ def _sse_done(text: str) -> dict:
                 ev = line[6:].strip()
             elif line.startswith("data:"):
                 dt = line[5:].strip()
-        if ev == "done" and dt:
-            return json.loads(dt)
+        if ev and dt:
+            try:
+                out.append((ev, json.loads(dt)))
+            except json.JSONDecodeError:
+                out.append((ev, dt))
+    return out
+def _sse_done(text: str) -> dict:
+    for ev, data in _sse_all(text):
+        if ev == "done":
+            return data
     raise AssertionError(f"SSE 里没有 done 事件：{text[:300]}")
+def test_stream_meta_carries_project_status():
+    """生成完成后必须把引擎状态推给前端。
+    否则前端还停在 DRAFT，"确认这一稿，看大纲"会被自己的步骤门禁挡住
+    （用户实际踩过：刚生成完点确认就提示"先完成当前这一步"）。
+    """
+    REGISTRY.register(_EchoTextProvider())
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"idea": "只做一集"}, headers=HEADERS).json()["id"]
+    with client.stream("POST", f"/api/projects/{pid}/script/generate/stream",
+                       headers=HEADERS, json={"version": 1}) as r:
+        events = _sse_all("".join(r.iter_text()))
+    meta = next(d for e, d in events if e == "meta")
+    assert meta["project_status"] == "CP1_PENDING", meta
+    # 引擎里的状态也确实推进了
+    detail = client.get(f"/api/projects/{pid}", headers=HEADERS).json()
+    assert detail["status"] == "CP1_PENDING"
 def test_stream_writes_episodes_one_by_one():
     """一集一集写：第 1 集写完再写第 2 集，第 1 集不能被覆盖。"""
     provider = _EchoTextProvider()

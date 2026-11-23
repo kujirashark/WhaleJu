@@ -40,7 +40,13 @@ export const useProjectStore = defineStore('project', () => {
     DRAFT: 0, CP1_PENDING: 1, CHARACT: 2, CP2_PENDING: 3,
     PLANNED: 4, RUNNING: 5, CP3_PENDING: 6, DELIVER: 7,
   }
-  const maxStep = computed(() => STEP_MAX_BY_STATUS[status.value] ?? 0)
+  const maxStep = computed(() => {
+    const byStatus = STEP_MAX_BY_STATUS[status.value] ?? 0
+    // 剧本已经写好、但引擎状态还没同步回前端时，第 2 步必须可达 ——
+    // 否则用户点「确认这一稿，看大纲」会被自己的门禁挡住（实测踩过）。
+    const byScript = script.value?.episodes?.length ? 1 : 0
+    return Math.max(byStatus, byScript)
+  })
   /** 素材可显示地址：引擎可能给绝对地址，也可能给 /api/... 相对地址。
    *  相对地址必须补上引擎基址，否则 <img src="/api/..."> 会指向前端源站 → 一片裂图。 */
   function assetUrl(u?: string | null): string {
@@ -109,6 +115,9 @@ export const useProjectStore = defineStore('project', () => {
               })
               // 残缺：引擎已保住写完的那几集，但这一稿没写全，要如实告诉用户
               partial.value = !!data.partial
+              // 引擎在剧本落库后已把状态推进到「等你确认剧本」，
+              // 前端必须同步，否则下一步的按钮会被自己的门禁挡住。
+              if (data.project_status) status.value = data.project_status
             }
             else if (ev === 'done') {
               script.value = data
@@ -118,6 +127,8 @@ export const useProjectStore = defineStore('project', () => {
               streamText.value = ''
               streamStage.value = ''
               streamWait.value = null
+              // 不在这里调 loadDetail：它会按引擎状态把界面跳到下一步，
+              // 用户刚看完生成结果就被挪走会很难受。状态已在 meta 里同步过。
               return { ok: true }
             } else if (ev === 'error') {
               contentError.value = `${data.message || '生成失败'}${data.hint ? ' · ' + data.hint : ''}`

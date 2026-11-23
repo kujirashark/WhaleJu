@@ -365,7 +365,7 @@ async def generate_script_stream(pid: str, req: ScriptGenReq = ScriptGenReq()):
                     # 限流退避：告诉用户"在等厂商恢复，还有几秒"
                     yield "event: wait\ndata: " + json.dumps(value, ensure_ascii=False) + "\n\n"
                 else:
-                    advance_status(pid, "script_ready")   # 剧本落库后同步推进到「等你确认剧本」
+                    nxt = advance_status(pid, "script_ready")   # 剧本落库后同步推进到「等你确认剧本」
                     # 附上本次调用的量化结果，让用户看到这次到底生成了多少
                     meta = {
                         "chars": sum(len(ep.get("script") or "") for ep in (value.get("episodes") or [])),
@@ -373,6 +373,8 @@ async def generate_script_stream(pid: str, req: ScriptGenReq = ScriptGenReq()):
                         "title": value.get("title") or "",
                         # 模型这次没写完时如实告知：已保住写完的那几集
                         "partial": bool(value.get("partial")),
+                        # 把最新业务状态一起推给前端：前端要靠它决定"下一步能不能点"
+                        "project_status": nxt,
                     }
                     # meta 必须早于 done：前端收到 done 即结束读取
                     yield "event: meta\ndata: " + json.dumps(meta, ensure_ascii=False) + "\n\n"
