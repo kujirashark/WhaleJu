@@ -16,6 +16,10 @@ watch(() => agent.messages.length, () => {
 watch(() => agent.streaming.length, () => {
   nextTick(() => { if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight })
 })
+// 执行过程在增长（"已完成 3/12"）：必须跟着滚，否则用户看不到进度在动
+watch(() => agent.processText, () => {
+  nextTick(() => { if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight })
+})
 async function send() {
   const v = msg.value.trim()
   if (!v) { ui.toast('直接说要做什么，比如：写剧本 / 确认剧本 / 拆镜头 / 生成画面'); return }
@@ -42,9 +46,14 @@ async function confirm() {
     </div>
     <!-- 对话历史：用户消息 + 助手回复（此前从未渲染，导致"发送后无任何反应"） -->
     <div ref="logEl" class="chat-log">
-      <div v-for="(m, i) in agent.messages" :key="i" class="chat-msg" :class="m.role">
+      <div v-for="(m, i) in agent.messages" :key="i" class="chat-msg" :class="[m.role, m.kind === 'step' ? 'is-step' : '']">
         <span class="chat-who">{{ m.role === 'user' ? '你' : '助手' }}</span>
-        <span class="chat-text">{{ m.text }}</span>
+        <span class="chat-text">
+          <template v-if="m.kind === 'step'">
+            <span v-for="(line, j) in m.text.split('\n')" :key="j" class="step-line">{{ line }}</span>
+          </template>
+          <template v-else>{{ m.text }}</template>
+        </span>
       </div>
       <!-- 正在回复：流式内容直接排在列表里（和历史消息同一条线） -->
       <div v-if="agent.streaming" class="chat-msg agent">
@@ -59,7 +68,7 @@ async function confirm() {
     </div>
     <div style="display:flex;gap:8px;padding:12px 24px">
       <input v-model="msg" placeholder="直接说要做什么，比如：写剧本 / 确认剧本 / 拆镜头 / 生成画面 / 导出成片" style="flex:1;border-radius:6px;padding:8px 12px;font-size:12.5px;background:var(--panel);color:var(--ink)" aria-label="给助手的留言" @keyup.enter="send">
-      <button class="btn btn-p" :disabled="agent.thinking" @click="send">发送</button>
+      <button class="btn btn-p" :disabled="agent.thinking || agent.executing" @click="send">{{ agent.executing ? '执行中…' : '发送' }}</button>
     </div>
   </div>
 </template>
@@ -70,6 +79,11 @@ async function confirm() {
 .chat-msg.user .chat-who{color:var(--accent)}
 .chat-text{color:var(--ink2);word-break:break-word;white-space:pre-wrap}
 .chat-msg.user .chat-text{color:var(--ink)}
+/* 执行过程：等宽 + 逐行清单，让"它在干什么"一眼看清 */
+.chat-msg.is-step .chat-text{display:flex;flex-direction:column;gap:3px;white-space:normal}
+.chat-msg.is-step .chat-who{color:var(--accent)}
+.step-line{font-family:var(--mono);font-size:11.5px;line-height:1.55;color:var(--ink3);display:block}
+.step-line:first-child{color:var(--ink2)}
 .chat-thinking{display:inline-flex;align-items:center;gap:7px;color:var(--ink3)}
 .chat-thinking .busy-dot{margin-top:0}
 .intent-bar{margin:10px 24px 0;padding:10px 12px;background:var(--accent-soft);border-radius:6px;display:flex;align-items:center;justify-content:space-between;gap:12px}

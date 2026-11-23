@@ -478,6 +478,19 @@ class ChatReq(BaseModel):
 class DecideReq(BaseModel):
     action: str = Field(pattern="^(approve|reject)$")
     payload: dict = Field(default_factory=dict)
+# 每个动作的"我现在做什么"话术（不花钱、直接执行的动作用）
+_ACTION_REPLY = {
+    "gen_script": "好，我现在用你配置的文本模型写剧本。",
+    "regen_script": "好，我重新写一稿。",
+    "gen_characters": "好，我现在用你的图片模型生成定妆图。",
+    "swap_role_image": "好，我重出定妆图。",
+    "gen_shots": "好，我按剧本拆镜头。",
+    "adjust_pacing": "好，我按新的节奏重新拆镜头。",
+    "gen_video": "好，我现在按镜头生成画面。",
+    "export_video": "好，我现在合成竖屏成片。",
+}
+def _action_reply(op: str) -> str:
+    return _ACTION_REPLY.get(op, "好，我这就做。")
 @app.post("/api/chat", dependencies=[Depends(auth)])
 async def chat(req: ChatReq):
     """对话（JSON 版）：返回结构意图（intent），不执行写操作。"""
@@ -541,6 +554,10 @@ async def chat_stream(req: ChatReq):
             reply = _confirm_step_reply(req.project_id)
         elif intent.op == "write_next_episode":
             reply = _write_next_episode_reply(req.project_id, intent.params.get("episode_index"))
+        elif intent.cost_impact <= 0:
+            # 不花钱的动作前端会直接执行：这时候说"你是想…吗？"很怪，
+            # 直接说"我现在做什么"，用户看到的是动作而不是反问。
+            reply = _action_reply(intent.op)
         else:
             reply = intent.confirm or "确认执行这一步吗？"
         for i in range(0, len(reply), 6):
