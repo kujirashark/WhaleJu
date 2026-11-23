@@ -10,6 +10,11 @@ const ui = useUiStore()
 const calls = useCallsStore()
 const tab = computed(() => project.tab)
 const done = computed(() => gen.done)
+/** 镜头清单：与第 6/7 步同源（引擎持久化素材），引擎重启后依然显示真实画面 */
+const shotList = computed<any[]>(() => {
+  const live = gen.visibleItems() as any[]
+  return live.length ? live : ((gen.persisted || []) as any[])
+})
 const realCost = computed(() => Math.round(gen.items.reduce((a: number, b: any) => a + (b.cost || 0), 0) * 10) / 10)
 const money = (n: number) => `${n.toFixed(1)} 元`
 function statusChip(s: string) {
@@ -32,13 +37,13 @@ onMounted(() => { if (tab.value === 'calls') calls.load(80) })
     </div>
     <div class="rbody">
       <template v-if="tab === 'shots'">
-        <div v-if="!gen.items.length" class="empty-mini">还没有生成镜头，开始生成后这里显示引擎的真实状态。</div>
-        <div v-for="(it, i) in gen.items" :key="it.shot_id" class="row">
+        <div v-if="!shotList.length" class="empty-mini">还没有生成镜头，开始生成后这里显示引擎的真实状态。</div>
+        <div v-for="(it, i) in shotList" :key="it.shot_id" class="row">
           <!-- 缩略图：右侧也要看得见真实画面，不能只有一行字 -->
-          <img v-if="it.media_url && it.ability !== 'video'" class="row-thumb" :src="project.assetUrl(it.media_url)" alt="" loading="lazy">
+          <img v-if="it.media_url && it.kind !== 'video'" class="row-thumb" :src="project.assetUrl(it.media_url)" alt="" loading="lazy">
           <div v-else-if="it.media_url" class="row-thumb video-thumb"><span>▶</span></div>
           <div v-else class="row-ph">{{ i + 1 }}</div>
-          <div class="m"><div class="t">{{ i + 1 }}. {{ it.scene_desc }}</div><div class="s">{{ it.fail_reason || '真实生成任务' }}</div></div>
+          <div class="m"><div class="t">{{ i + 1 }}. {{ it.scene_desc || `第 ${i + 1} 镜` }}</div><div class="s">{{ it.fail_reason || '真实生成任务' }}</div></div>
           <span class="chip" :class="statusChip(it.status).cls">{{ statusChip(it.status).text }}</span>
         </div>
       </template>
@@ -47,8 +52,13 @@ onMounted(() => { if (tab.value === 'calls') calls.load(80) })
         <div v-for="r in project.characters" :key="r.id" class="row">
           <img v-if="project.assetUrl(r.ref_url) || project.assetUrl(r.remote_url)" :src="project.assetUrl(r.ref_url) || project.assetUrl(r.remote_url)" alt="" loading="lazy">
           <div v-else class="row-ph">照</div>
-          <div class="m"><div class="t">{{ r.name }}</div><div class="s">{{ project.locked ? '已确认' : (project.selectedRoles.has(r.id) ? '已选中' : '未选中') }}</div></div>
-          <span class="chip" :class="project.locked ? 'c-ok' : 'c-wait'">{{ project.locked ? '已确认' : '待确认' }}</span>
+          <!-- 状态一律读引擎事实（characters.locked）：以前这里读前端内存态，
+               刷新就丢，同一屏会出现"中间已确认 / 右侧待确认"两套说法 -->
+          <div class="m">
+            <div class="t">{{ r.name }}</div>
+            <div class="s">{{ project.rolesLocked ? '形象已锁定' : (project.selectedRoles.has(r.id) ? '已选中，待确认' : '未选中') }}</div>
+          </div>
+          <span class="chip" :class="project.rolesLocked ? 'c-ok' : 'c-wait'">{{ project.rolesLocked ? '已确认' : '待确认' }}</span>
         </div>
       </template>
       <template v-else-if="tab === 'calls'">

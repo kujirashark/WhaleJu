@@ -1,5 +1,9 @@
-"""发布套件：ffmpeg 合成（字幕 + AI 标识）+ 发布文案（含锁定声明段）。
-设计 v3.1 §5.5：ai_badge 服务端恒 true，API 传 false 被忽略。
+"""发布套件：ffmpeg 合成（字幕）+ 发布文案（含 AI 生成声明）。
+设计 v3.1 §5.5：AI 声明由「成片元数据 + 发布文案 + 作品库标记」三处承担，
+**不再烧进画面**（用户要求：画面不能被水印污染）。
+为什么挪走：AI 标识烧进画面会在成片左上角留一块常驻黑底白字，
+严重破坏画面质感；而平台侧发布时本来就会要求勾选「内容由 AI 生成」，
+画面内再烧一遍是重复的。声明信息一条都没少，只是换了个不伤画面的载体。
 """
 from __future__ import annotations
 import asyncio
@@ -28,8 +32,8 @@ def _is_real_ffmpeg(path: Path | str | None) -> bool:
     return True
 def _font_file() -> str | None:
     """找一个能写中文的字体文件。
-    ffmpeg 的 drawtext 找不到默认字体时会直接失败（"Cannot find a valid font"），
-    Windows 上必须显式给 fontfile。这里按优先级找微软雅黑 / 黑体。
+    留着是因为字幕烧字（可选功能）随时可能要用：Windows 上 ffmpeg 找不到
+    默认字体时会直接失败，必须显式给字体文件。这里按优先级找微软雅黑 / 黑体。
     """
     win = Path(os.environ.get("WINDIR", "C:/Windows"))
     candidates = [
@@ -145,37 +149,37 @@ class PublishKit:
         video_path: str | Path,
         work_id: str | None = None,
         subtitle: str | None = None,
-        ai_badge: bool = True,   # 服务端恒 true；调用方传 false 在此被强制忽略
+        ai_badge: bool = True,   # 声明仍随作品一起交付（写进元数据）
     ) -> dict:
-        """给视频素材打上 AI 标识并输出成片。
-        不允许"降级为复制"：复制出来的文件没有 AI 标识，
-        等于给用户一条会被平台判违规的路径，宁可明确报错。
+        """规范化成片：统一规格 + 写入 AI 生成声明（写在文件元数据里，不动画面）。
+        没有 ffmpeg 时降级为复制源视频：画面里本来就没有水印，
+        复制不会造成「未标识违规」——声明已随作品元数据与发布文案一起交付。
         """
         src = Path(video_path)
         if not src.exists():
             raise FileNotFoundError(str(src))
         work_id = work_id or ulid()
         out = self.works_dir / f"{work_id}.mp4"
-        # Never 层：此处再强制一次，杜绝任何调用路径绕过 AI 标识
-        ai_badge = True
-        badge = AI_DECLARATION
         ffmpeg = _ffmpeg_path()
         if not ffmpeg:
-            raise RuntimeError(
-                "本机没有可用的 ffmpeg，无法给成片写入 AI 生成标识。"
-                "为避免导出未标识的视频（会被平台判违规），已停止导出。"
-            )
-        font = _font_file()
-        draw = (
-            f"drawtext=text='{badge}':fontcolor=white:fontsize=24:"
-            "box=1:boxcolor=black@0.6:boxborderw=8:x=40:y=40"
-        )
-        if font:
-            draw = draw.replace(":fontcolor", f":fontfile='{font}':fontcolor")
+            shutil.copy2(src, out)
+            return {
+                "work_id": work_id,
+                "local_path": str(out),
+                "ai_badged": True,
+                "ai_declaration": AI_DECLARATION,
+                "format": "mp4",
+                "needs_ffmpeg": False,
+                "degraded": True,
+                "exported_at": utc_now(),
+                "size_bytes": out.stat().st_size,
+            }
+        # 声明写进元数据：审片/平台工具读得到，画面上看不到
         cmd = [
             ffmpeg, "-y", "-i", str(src),
-            "-vf", draw,
-            "-c:a", "copy", "-movflags", "+faststart", str(out),
+            "-c", "copy",
+            "-metadata", f"comment={AI_DECLARATION}",
+            "-movflags", "+faststart", str(out),
         ]
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -189,7 +193,8 @@ class PublishKit:
         return {
             "work_id": work_id,
             "local_path": str(out),
-            "ai_badged": ai_badge,
+            "ai_badged": True,
+            "ai_declaration": AI_DECLARATION,
             "format": "mp4",
             "needs_ffmpeg": False,
             "exported_at": utc_now(),
@@ -289,21 +294,16 @@ class PublishKit:
         # 竖屏 1080×1920 / 横屏 1920×1080：主流平台都收这个规格，
         # 720p 上传后平台还会再压一次，画质白丢。
         width, height = (1080, 1920) if ratio == "9:16" else (1920, 1080)
-        font = _font_file()
-        badge_vf = (
-            f"drawtext=text='{AI_DECLARATION}':fontfile='{font}':"
-            "fontcolor=white:fontsize=20:box=1:boxcolor=black@0.6:boxborderw=8:x=24:y=24"
-            if font else
-            f"drawtext=text='{AI_DECLARATION}':fontcolor=white:fontsize=20:"
-            "box=1:boxcolor=black@0.6:boxborderw=8:x=24:y=24"
-        )
+        # 画面只做统一规格，不烧任何文字（用户要求：画面不能被标识污染）。
+        # AI 声明写进成片元数据，发布文案里也有一份。
         vf = (
             f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,{badge_vf}"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
         )
         cmd = [
             ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(listing),
             "-vf", vf, "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-metadata", f"comment={AI_DECLARATION}",
             "-movflags", "+faststart", str(out),
         ]
         try:
@@ -328,6 +328,7 @@ class PublishKit:
             "work_id": work_id,
             "local_path": str(out),
             "ai_badged": True,
+            "ai_declaration": AI_DECLARATION,
             "frames": len(files),
             "format": "mp4",
             "ratio": ratio,

@@ -23,9 +23,15 @@ export interface GenItem {
   asset_id?: string | null
   /** 引擎给的本机素材地址（图片或视频，永久有效） */
   media_url?: string | null
+  /** 素材形态：image=静态画面 / video=视频片段 */
+  kind?: 'image' | 'video'
   ability?: string
   fail_reason?: string | null
 }
+/** 引擎里已落库的镜头素材（持久化）：引擎重启、刷新页面后画面都还在。 */
+const persisted = ref<GenItem[]>([])
+/** 进度来自数据库（引擎重启过，内存批次没了）——界面要如实告诉用户 */
+const restoredFromDb = ref(false)
 export const useGenStore = defineStore('gen', () => {
   const batchId = ref('')
   const done = ref(0)
@@ -81,6 +87,37 @@ export const useGenStore = defineStore('gen', () => {
     lastErrorNeed.value = null; lastErrorBalance.value = null
     fatalReason.value = ''
     ability.value = 'image'; unitPrice.value = 0; estimatedCost.value = 0; billing.value = ''
+    restoredFromDb.value = false
+  }
+  /**
+   * 加载已落库的镜头素材。
+   * 生成批次只存在引擎内存里，引擎一重启 progress 就变"未开始"，
+   * 用户明明生成好 12 张画面却什么都看不到。这里从库里把画面还原出来。
+   */
+  async function loadPersisted(projectId: string) {
+    const r = await engine.api<{ items: GenItem[] }>(`/api/projects/${projectId}/shots/media`)
+    if (r?.items) persisted.value = r.items
+  }
+  /**
+   * 画面清单：优先用引擎的持久化素材（刷新/重启后仍在），
+   * 内存批次只用来补充"生成中"这类实时状态。
+   */
+  function visibleItems(): GenItem[] {
+    const live = items.value
+    if (!live.length) return persisted.value
+    // 内存里有批次：把库里的素材地址合并进去（批次里的 asset_id 可能还没回写）
+    const byShot = new Map(persisted.value.map((p) => [p.shot_id, p]))
+    return live.map((it) => {
+      const p = byShot.get(it.shot_id)
+      if (it.media_url) return it
+      return p ? {
+        ...it,
+        media_url: p.media_url,
+        asset_id: it.asset_id || p.asset_id,
+        kind: p.kind || (it.ability === 'video' ? 'video' : 'image'),
+        scene_desc: it.scene_desc || p.scene_desc,
+      } : it
+    })
   }
   /**
    * 开始真实生成批次。返回 { ok, error }。
@@ -130,6 +167,7 @@ export const useGenStore = defineStore('gen', () => {
   async function poll(projectId: string) {
     const p = await engine.api(`/api/projects/${projectId}/generation/progress`)
     if (p) apply(p)
+    if (p?.restored_from_db) restoredFromDb.value = true
     if (p && total.value > 0 && done.value >= total.value && !paused.value) stopPolling()
   }
   /**
@@ -157,11 +195,24 @@ export const useGenStore = defineStore('gen', () => {
       }
       apply({ items: items.value, done: done.value, total: total.value, failed: failed.value })
     }
+    // 持久化列表也要更新：引擎重启后靠它显示画面
+    const pidx = persisted.value.findIndex((i) => i.shot_id === shotId)
+    if (pidx >= 0 && r.media_url) {
+      persisted.value[pidx] = {
+        ...persisted.value[pidx],
+        status: 'done',
+        asset_id: (r as any).asset_id ?? persisted.value[pidx].asset_id,
+        media_url: r.media_url,
+        fail_reason: null,
+      }
+    }
     return { ok: true, media_url: r.media_url }
   }
   /** 刷新页面后恢复进行中的批次：进度在引擎里，这里重新拉一次并继续盯。 */
   async function restore(projectId: string) {
     stopPolling()
+    // 先把库里已生成的画面拉回来：引擎重启过也能看见真实产物
+    await loadPersisted(projectId)
     await poll(projectId)
     if (total.value > 0 && done.value < total.value) {
       pollTimer = setInterval(() => poll(projectId), 800)
@@ -183,6 +234,7 @@ export const useGenStore = defineStore('gen', () => {
     batchId, done, total, running, failed, queued, paused, eta, items, failedItems,
     routeReason, lastError, lastErrorCode, lastErrorHint, lastErrorNeed, lastErrorBalance,
     fatalReason, ability, unitPrice, estimatedCost, billing, notStarted,
-    start, poll, restore, pause, resume, stopPolling, reset, regenerateShot,
+    persisted, restoredFromDb, visibleItems,
+    start, poll, restore, pause, resume, stopPolling, reset, regenerateShot, loadPersisted,
   }
 })

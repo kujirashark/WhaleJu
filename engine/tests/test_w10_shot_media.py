@@ -119,16 +119,20 @@ def test_regenerate_single_shot(img_server):
     assert body["media_url"], body
     assert provider.calls == calls_before + 1, "只应该再调用一次厂商"
     # 旧素材必须作废：否则导出时新旧两张都会被拼进去
+    # 注意：库里的 shot_id 带项目前缀（db_shot_id），避免跨项目串台
+    from engine.app.workflow.generation import db_shot_id
     with DB.read() as c:
         rows = c.execute(
-            "SELECT id FROM assets WHERE project_id=? AND shot_id=?", (pid, first["shot_id"])
+            "SELECT id FROM assets WHERE project_id=? AND shot_id=?",
+            (pid, db_shot_id(pid, first["shot_id"])),
         ).fetchall()
     ids = [x["id"] for x in rows]
     assert old_asset_id not in ids, f"旧素材没被清掉：{ids}"
     # 另一个镜头的素材不受影响
     with DB.read() as c:
         n = c.execute(
-            "SELECT COUNT(*) FROM assets WHERE project_id=? AND shot_id=?", (pid, other["shot_id"])
+            "SELECT COUNT(*) FROM assets WHERE project_id=? AND shot_id=?",
+            (pid, db_shot_id(pid, other["shot_id"])),
         ).fetchone()[0]
     assert n >= 1, "别的镜头素材不该被动"
 def test_regenerate_unknown_shot_is_rejected(img_server):

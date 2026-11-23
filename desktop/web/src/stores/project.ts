@@ -12,10 +12,18 @@ export const useProjectStore = defineStore('project', () => {
   const tab = ref<'shots' | 'roles' | 'cost' | 'calls'>('shots')
   const scriptVer = ref(1)
   const selectedRoles = ref<Set<string>>(new Set(['child', 'teen', 'adult', 'mid', 'old']))
-  const locked = ref(false)
   const ratio = ref<'v' | 'h'>('v')
   const player = ref({ pos: 0, playing: false })
   const exp = ref({ state: 'idle' as 'idle' | 'running' | 'done', pct: 0 })
+  /** 导出产物信息（真实结果，不是进度假动画）。 */
+  const expResult = ref<{
+    work_id?: string; format?: string; size_bytes?: number; frames?: number
+    needs_ffmpeg?: boolean; reason?: string; download_url?: string; ratio?: string
+    /** 成片在线预览地址（导完直接看，不用先下载） */
+    preview_url?: string
+    exported_at?: string
+    exists?: boolean
+  } | null>(null)
   const projects = ref<any[]>([])
   // 真实内容（来自引擎，非演示数据）
   const detail = ref<any>(null)
@@ -35,6 +43,8 @@ export const useProjectStore = defineStore('project', () => {
   const streamText = ref('')  // 生成过程实时文本（流式 token 累积）
   const status = ref('DRAFT') // 引擎业务状态（DRAFT→…→DELIVER），是流程进度的唯一事实来源
   const assets = ref<any[]>([]) // 引擎里已产出的真实素材（画面/成片）
+  /** 角色形象是否已确认 —— 引擎事实（characters.locked），不是前端自己猜的 */
+  const rolesLocked = ref(false)
   /** 引擎状态 → 允许到达的最远步骤。前进必须按顺序，越界会被拦下。 */
   const STEP_MAX_BY_STATUS: Record<string, number> = {
     DRAFT: 0, CP1_PENDING: 1, CHARACT: 2, CP2_PENDING: 3,
@@ -195,12 +205,41 @@ export const useProjectStore = defineStore('project', () => {
       }
       status.value = r.status || 'DRAFT'
       assets.value = r.assets || []
+      // 角色锁定状态同步引擎事实：以前这个状态只在前端内存里，
+      // 刷新就丢 —— 同一屏出现"中间说已确认、右侧说待确认"两套说法。
+      rolesLocked.value = !!r.roles_locked
+      // 成片状态同步引擎事实：导出的成片已经落库，
+      // 刷新页面后第 8 步仍然能看到并直接播放，不能变回"未开始"。
+      if (r.latest_work) {
+        expResult.value = r.latest_work
+        exp.value = { state: 'done', pct: 100 }
+      } else if (exp.value.state !== 'running') {
+        exp.value = { state: 'idle', pct: 0 }
+        expResult.value = null
+      }
       if (r.script_ver) scriptVer.value = r.script_ver
       // 步骤跟随引擎状态：打开项目就落在「当前该做的事」上，
       // 不会因为前端残留的 step 而停在已经完成或还没解锁的步骤。
       // 用户主动点过侧栏后（stepTouched），则尊重用户选择，不再强制拉回。
       if (!stepTouched || step.value > maxStep.value) step.value = maxStep.value
     }
+  }
+  /** 确认角色形象：锁定落库（引擎事实），刷新后仍然是"已确认"。
+   *  幂等：已锁定时直接返回成功，不会因为重复确认而报错。 */
+  async function lockRoles(): Promise<boolean> {
+    if (!currentId.value) { useUiStore().toast('还没有当前项目'); return false }
+    if (rolesLocked.value) return true
+    const r = await engine.api<{ locked: number }>(
+      `/api/projects/${currentId.value}/shots/roles-lock`,
+      { method: 'POST' },
+    )
+    if (r) {
+      rolesLocked.value = true
+      await loadDetail()
+      return true
+    }
+    useUiStore().toast(engine.error || '这一步暂时无法确认')
+    return false
   }
   /** 真实生成定妆图（调用已配置图片模型）。 */
   async function genCharacters(count = 5): Promise<{ ok: boolean; error?: string }> {
@@ -320,12 +359,6 @@ export const useProjectStore = defineStore('project', () => {
     }, 180)
   }
   /** 导出产物信息（真实结果，不是进度假动画）。 */
-  const expResult = ref<{
-    work_id?: string; format?: string; size_bytes?: number; frames?: number
-    needs_ffmpeg?: boolean; reason?: string; download_url?: string; ratio?: string
-    /** 成片在线预览地址（导完直接看，不用先下载） */
-    preview_url?: string
-  } | null>(null)
   async function exportWork(): Promise<any | null> {
     if (!currentId.value) return null
     exp.value = { state: 'running', pct: 0 }
@@ -344,10 +377,10 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
   return {
-    currentId, step, tab, scriptVer, selectedRoles, locked, ratio, player, exp, expResult, projects,
+    currentId, step, tab, scriptVer, selectedRoles, rolesLocked, ratio, player, exp, expResult, projects,
     detail, script, shots, characters, contentBusy, contentError, streamText, lastStream, streamStage, streamWait, partial,
     status, assets, maxStep, assetUrl, createdEpisodeCount,
-    goto, confirmStep, create, loadProjects, loadDetail, remove, loadTrash, restore,
+    goto, confirmStep, lockRoles, create, loadProjects, loadDetail, remove, loadTrash, restore,
     genScript, genScriptStream, genShots, genCharacters, toggleRole,
     togglePlay, startExport, exportWork,
   }

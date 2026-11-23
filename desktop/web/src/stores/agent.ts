@@ -271,7 +271,11 @@ export const useAgentStore = defineStore('agent', () => {
             msg = engine.error || '这一步暂时无法确认'
             break
           }
-          if (target.step === 4) project.locked = true
+          if (target.step === 4) {
+            // 角色锁定落库（引擎事实）：刷新后仍然是"已确认"，不会退回"待确认"
+            const ok = await project.lockRoles()
+            if (!ok) { msg = engine.error || '角色锁定失败'; break }
+          }
           appendStep(`✓ 已确认${target.label}`)
           msg = `已确认${target.label}，下一步：${target.next}`
           break
@@ -358,13 +362,13 @@ export const useAgentStore = defineStore('agent', () => {
           beginStep('正在准备导出…')
           const blocked = await ensureState()
           if (blocked) { appendStep(`✗ ${blocked}`); msg = blocked; break }
-          setProgress('正在用 ffmpeg 合成竖屏 MP4（含字幕与 AI 标识）…')
+          setProgress('正在用 ffmpeg 合成竖屏 MP4（画面不带水印）…')
           const work = await project.exportWork()
           if (work) {
             appendStep(work.format === 'mp4'
               ? `✓ 成片已导出（${work.format.toUpperCase()}，${Math.round((work.size_bytes || 0) / 1048576)} MB）`
               : `✓ 已导出 ${work.frames || 0} 张画面（本机没找到 ffmpeg，装好后说「重新导出」就能合成 mp4）`)
-            msg = '成片已存入本机作品库（带 AI 标识）'
+            msg = '成片已存入本机作品库'
           } else {
             appendStep(`✗ ${engine.error || '导出失败：请先完成画面生成'}`)
             msg = '导出失败：请先完成画面生成'

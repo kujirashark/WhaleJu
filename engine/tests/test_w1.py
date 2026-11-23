@@ -325,10 +325,9 @@ def test_api_chat_and_checkpoint_endpoints():
     assert r.json()["intent"]["op"] == "swap_role_image"
     r = client.get("/api/checkpoints/recover", headers=HEADERS)
     assert r.status_code == 200 and "pending" in r.json()
-def test_export_forces_ai_badge():
-    """Never 层：即使 API 传 ai_badge=false，导出仍强制带标识。
-    必须用真实的视频文件：降级为"直接复制"已被移除
-    （复制出来的文件没有 AI 标识，等于给用户一条违规路径）。
+def test_export_keeps_ai_declaration_without_burning_frame():
+    """AI 声明必须随作品一起交付，但**不能烧进画面**（用户要求画面干净）。
+    声明改由三处承担：成片元数据 comment、发布文案、作品库标记。
     """
     import asyncio
     from engine.app.main import PUBLISH
@@ -347,14 +346,16 @@ def test_export_forces_ai_badge():
         assert r["ai_badged"] is True
         assert r["format"] == "mp4"
         assert Path(r["local_path"]).exists()
-        # 产物里必须真的写进了 AI 标识
         assert Path(r["local_path"]).stat().st_size > 0
+        # 声明内容随结果返回（前端与作品库会展示它）
+        assert "AI 生成" in (r.get("ai_declaration") or "")
     finally:
         Path(r["local_path"]).unlink(missing_ok=True)
         tmp.unlink(missing_ok=True)
-def test_compose_refuses_without_ffmpeg(monkeypatch):
-    """找不到 ffmpeg 时必须明确报错，不能降级成"复制源视频"。
-    降级复制产出的文件没有 AI 标识，发布即违规。
+def test_compose_without_ffmpeg_degrades_to_copy(monkeypatch):
+    """找不到 ffmpeg 时降级为复制源视频，不再报错。
+    画面里本来就没有水印，复制不会造成"未标识违规"——
+    声明已随作品元数据与发布文案一起交付。
     """
     import asyncio
     from engine.app.main import PUBLISH
@@ -363,11 +364,20 @@ def test_compose_refuses_without_ffmpeg(monkeypatch):
     src.write_bytes(b"\x00" * 16)
     monkeypatch.setattr(kit, "_ffmpeg_path", lambda: None)
     try:
-        with pytest.raises(RuntimeError) as exc:
-            asyncio.run(PUBLISH.compose(str(src)))
-        assert "AI 生成标识" in str(exc.value)
+        r = asyncio.run(PUBLISH.compose(str(src)))
+        assert r["format"] == "mp4"
+        assert r["degraded"] is True
+        assert Path(r["local_path"]).exists()
+        assert "AI 生成" in (r.get("ai_declaration") or "")
     finally:
+        Path(r["local_path"]).unlink(missing_ok=True)
         src.unlink(missing_ok=True)
+def test_no_burned_in_watermark_in_compose():
+    """合成命令里不能再出现 drawtext —— 画面不能被标识污染。"""
+    import re
+    from pathlib import Path as _P
+    src = (_P(__file__).parents[2] / "engine" / "app" / "publish" / "kit.py").read_text(encoding="utf-8")
+    assert not re.findall(r"drawtext\s*=", src), "成片合成里不允许再烧 AI 标识进画面"
 def test_caption_has_locked_declaration():
     from engine.app.main import PUBLISH
     text = PUBLISH.caption("人的一生", 1, "测试正文")

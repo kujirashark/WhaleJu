@@ -275,6 +275,9 @@ def get_project(pid: str, request: Request):
         # 定妆图已落地到本机 → 走引擎文件端点；没落地成功才退回厂商链接
         ch["ref_url"] = _asset_url(first.get("url"), first.get("asset_id"), base)
         ch["remote_url"] = first.get("remote_url")
+    # 角色是否已锁定：引擎事实（库里 characters.locked）。
+    # 以前这个状态只在前端内存里，刷新就丢，导致同一屏两套说法。
+    roles_locked = any(int(c.get("locked") or 0) for c in chars)
     # 真实素材：第 7 步「看成片」必须读引擎里的真实产物，
     # 否则刷新页面后前端内存态清空，用户看到空白的第 7 步。
     assets = ASSETS.list_project(pid)
@@ -284,6 +287,34 @@ def get_project(pid: str, request: Request):
         if a.get("kind") == "image":
             a["kind"] = "character" if a.get("character_id") else "shot"
     status = sync_status(pid, p, len(chars))
+    # 最新成片：第 8 步必须能看到已经导出的东西。
+    # 以前这个信息只存在前端内存里，刷新页面就消失 —— 用户明明导出过，
+    # 打开第 8 步却是一片空白。
+    latest_work = DB.list(
+        "SELECT * FROM assets WHERE project_id=? AND kind='work' ORDER BY created_at DESC LIMIT 1",
+        (pid,),
+    )
+    work_info = None
+    if latest_work:
+        w = latest_work[0]
+        wpath = ASSETS.resolve(w.get("local_path") or "")
+        is_dir = wpath.is_dir()
+        work_info = {
+            "work_id": w["id"],
+            "format": "frames" if is_dir else "mp4",
+            "size_bytes": w.get("size_bytes") or 0,
+            "frames": (
+                len([f for f in wpath.iterdir()
+                     if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")])
+                if is_dir and wpath.exists() else 0
+            ),
+            "needs_ffmpeg": is_dir,
+            "ratio": "9:16",
+            "exists": wpath.exists(),
+            "preview_url": f"/api/works/{w['id']}/preview?token={LOCAL_TOKEN}",
+            "download_url": f"/api/works/{w['id']}/download?token={LOCAL_TOKEN}",
+            "exported_at": w.get("created_at"),
+        }
     return {
         **p,
         "status": status,
@@ -291,6 +322,8 @@ def get_project(pid: str, request: Request):
         "shots": shots,
         "characters": chars,
         "assets": assets,
+        "roles_locked": roles_locked,
+        "latest_work": work_info,
         "resume_hint": f"当前状态：{p['status']}",
         "credits_frozen": LEDGER.wallet()["frozen"],
     }
@@ -466,6 +499,14 @@ def advance(pid: str, step: int, req: AdvanceReq):
     except GuardError as e:
         raise HTTPException(400, {"code": e.code, "message": e.message})
     DB.execute("UPDATE projects SET status=? WHERE id=?", (nxt, pid))
+    # 角色锁定必须落库：确认角色形象这一步的"已锁定"要能扛住刷新，
+    # 否则同一屏会出现"中间说已确认、右侧说待确认"两套说法。
+    if "lock_characters" in effects:
+        try:
+            with DB.tx() as c:
+                c.execute("UPDATE characters SET locked=1 WHERE project_id=?", (pid,))
+        except Exception:  # noqa: BLE001 - 锁定失败不阻断流程推进
+            pass
     return {"project_status": nxt, "effects": list(effects)}
 @app.post("/api/wallet/recharge", dependencies=[Depends(auth)])
 def recharge(req: RechargeReq):
@@ -622,7 +663,7 @@ async def export_project(pid: str, req: ExportReq, request: Request = None):
             frames = [
                 ASSETS.resolve(r["local_path"]) for r in DB.list(
                     "SELECT local_path FROM assets WHERE project_id=? "
-                    "AND (kind='shot' OR (kind='image' AND character_id IS NULL)) "
+                    "AND (kind IN ('shot','video') OR (kind='image' AND character_id IS NULL)) "
                     "ORDER BY created_at",
                     (pid,),
                 ) if ASSETS.resolve(r["local_path"]).exists()
@@ -675,7 +716,7 @@ def list_calls(limit: int = 60):
     return {"items": call_log.recent(limit)}
 @app.get("/api/assets/{asset_id}/file")
 def asset_file(asset_id: str, token: str | None = None):
-    """素材只读文件端点：第 3/7 步要用 <img src> 展示真实画面，
+    """素材只读文件端点：第 3/6/7 步要用 <img src> / <video src> 展示真实画面，
     无法携带自定义请求头，因此这里用查询参数校验本地令牌。"""
     if token != LOCAL_TOKEN:
         raise HTTPException(401, "令牌无效")
@@ -690,7 +731,15 @@ def asset_file(asset_id: str, token: str | None = None):
     p = ASSETS.resolve(ref)
     if not p.exists():
         raise HTTPException(404, "素材文件已被移动或删除")
-    return FileResponse(p)
+    # 视频要能在页面里直接播、能拖进度条：FileResponse 默认支持 Range，
+    # 这里显式声明 Accept-Ranges 并按类型给出 media_type。
+    suffix = p.suffix.lower()
+    media_type = {
+        ".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".webp": "image/webp", ".gif": "image/gif",
+    }.get(suffix, "application/octet-stream")
+    return FileResponse(p, media_type=media_type, headers={"Accept-Ranges": "bytes"})
 @app.get("/api/works", dependencies=[Depends(auth)])
 def list_works():
     """作品库：带上项目名与集数，用户才认得出这是哪部剧的哪一集。"""
@@ -999,10 +1048,18 @@ async def generation_progress(pid: str):
     """进度是引擎事实；前端只渲染，不做业务判断。"""
     r = GENERATIONS.progress(pid)
     if r is None:
-        # 尚未开始：这是一个真实的中性状态，不是伪装成"已排队 12 个"
-        return {"batch_id": None, "done": 0, "total": 0, "running": 0, "failed": 0,
-                "queued": 0, "paused": False, "eta_s": None,
-                "failed_items": [], "items": [], "not_started": True}
+        # 内存里没有批次（引擎重启过）：不要报"未开始"让用户以为白干了，
+        # 从库里把已经生成的素材还原成镜头清单 —— 画面就在本机。
+        restored = project_shots_media(pid)
+        items = restored.get("items") or []
+        done = sum(1 for i in items if i.get("status") == "done")
+        return {
+            "batch_id": None, "done": done, "total": len(items), "running": 0,
+            "failed": 0, "queued": 0, "paused": False, "eta_s": None,
+            "failed_items": [], "items": items,
+            "not_started": done == 0,
+            "restored_from_db": done > 0,
+        }
     # 全部镜头完成 → RUNNING → CP3_PENDING（等你看成片确认）
     if r.get("total") and r.get("done", 0) >= r.get("total", 0) and not r.get("paused"):
         advance_status(pid, "all_done")
@@ -1012,7 +1069,9 @@ async def generation_progress(pid: str):
     if any(not it.get("asset_id") for it in items):
         # 老数据没写 assets.shot_id：按生成顺序兜底匹配一次，别让历史项目全是空缩略图
         legacy = DB.list(
-            "SELECT id FROM assets WHERE project_id=? AND kind IN ('shot','video') ORDER BY created_at",
+            "SELECT id FROM assets WHERE project_id=? "
+            "AND (kind IN ('shot','video') OR (kind='image' AND character_id IS NULL)) "
+            "ORDER BY created_at",
             (pid,),
         )
     for idx, it in enumerate(items):
@@ -1027,6 +1086,114 @@ def _asset_file_url(asset_id: str | None) -> str | None:
     if not asset_id:
         return None
     return f"/api/assets/{asset_id}/file?token={LOCAL_TOKEN}"
+@app.get("/api/projects/{pid}/shots/media", dependencies=[Depends(auth)])
+def project_shots_media(pid: str):
+    """项目的镜头素材清单（从数据库读，引擎重启后依然在）。
+    为什么要有这个端点：生成批次只存在于内存里，引擎一重启
+    progress 就变成"未开始"，第 6/7 步会变成一片空白 —— 用户明明
+    已经生成好 12 张画面，却什么都看不到。素材本身已经落库，
+    这里把它按镜头顺序还原出来，界面永远能看到真实产物。
+    返回：[{shot_id, idx, scene_desc, status, media_url, kind, ability}]
+    """
+    p = DB.get("projects", pid)
+    if not p or p.get("deleted_at"):
+        raise HTTPException(404, "项目不存在或已被清理")
+    # 1) 镜头素材：优先用精确的 shot_id 关联，老数据按生成顺序兜底
+    rows = DB.list(
+        "SELECT id, kind, shot_id, local_path, size_bytes FROM assets "
+        "WHERE project_id=? AND (kind IN ('shot','video') OR (kind='image' AND character_id IS NULL)) "
+        "ORDER BY created_at",
+        (pid,),
+    )
+    by_shot: dict[str, dict] = {}
+    loose: list[dict] = []
+    for r in rows:
+        sid = r.get("shot_id")
+        if sid:
+            # 库里可能是带项目前缀的 ID，统一剥成短号（s1）便于和批次对齐
+            short = sid.split("_", 1)[-1] if "_" in sid else sid
+            by_shot[short] = r
+        else:
+            loose.append(r)
+    # 2) 镜头清单：优先用 shots 表（新一轮生成会写），否则用项目里的分镜表
+    shot_rows = DB.list(
+        "SELECT s.id, s.idx, s.scene_desc, s.ability, s.status FROM shots s "
+        "JOIN episodes e ON e.id = s.episode_id WHERE e.project_id=? ORDER BY s.idx",
+        (pid,),
+    )
+    shots_meta: list[dict] = []
+    for s in shot_rows:
+        sid = s["id"]
+        short = sid.split("_", 1)[-1] if "_" in sid else sid
+        shots_meta.append({
+            "shot_id": short, "idx": s["idx"], "scene_desc": s["scene_desc"],
+            "ability": s["ability"], "status": "done",
+        })
+    if not shots_meta:
+        # 老项目 shots 表是空的：用项目里真实的分镜表还原镜头顺序
+        meta = loads(p.get("shots_json"), None) if p.get("shots_json") else None
+        for i, sc in enumerate((meta or {}).get("shots") or [], start=1):
+            shots_meta.append({
+                "shot_id": f"s{i}", "idx": sc.get("idx") or i,
+                "scene_desc": sc.get("scene") or "", "ability": "image", "status": "done",
+            })
+    items: list[dict] = []
+    used_ids: set[str] = set()
+    for i, m in enumerate(shots_meta):
+        shot_id = m["shot_id"]
+        asset = by_shot.get(shot_id)
+        if asset is None and i < len(loose):
+            asset = loose[i]
+        if asset is not None:
+            used_ids.add(asset["id"])
+        items.append({
+            **m,
+            "status": "done" if asset else "pending",
+            "asset_id": asset["id"] if asset else None,
+            "media_url": _asset_file_url(asset["id"] if asset else None),
+            "kind": ("video" if asset["kind"] == "video" else "image") if asset else "image",
+            "size_bytes": asset["size_bytes"] if asset else 0,
+        })
+    # 3) 兜底：有素材但镜头表对不上（例如镜头数比素材少），把剩余素材补在后面
+    for j, asset in enumerate(loose):
+        if asset["id"] in used_ids:
+            continue
+        items.append({
+            "shot_id": f"s{len(items) + 1}", "idx": len(items) + 1,
+            "scene_desc": "", "status": "done", "ability": "image",
+            "asset_id": asset["id"], "media_url": _asset_file_url(asset["id"]),
+            "kind": "video" if asset["kind"] == "video" else "image",
+            "size_bytes": asset["size_bytes"],
+        })
+    return {"items": items, "total": len(items)}
+@app.post("/api/projects/{pid}/shots/roles-lock", dependencies=[Depends(auth)])
+def lock_project_roles(pid: str):
+    """确认角色形象：把选中的角色在库里标记为已锁定。
+    以前"角色是否已确认"只存在前端内存里（project.locked），
+    刷新页面就丢，导致右侧角色列表显示"待确认"、
+    而中间卡片显示"已确认" —— 同一屏两套说法。锁定必须落到库里。
+    """
+    p = DB.get("projects", pid)
+    if not p or p.get("deleted_at"):
+        raise HTTPException(404, "项目不存在或已被清理")
+    chars = DB.list("SELECT id FROM characters WHERE project_id=?", (pid,))
+    if not chars:
+        raise HTTPException(400, {"code": "E4008", "message": "还没有定妆图，无法确认角色形象"})
+    with DB.tx() as c:
+        c.execute("UPDATE characters SET locked=1 WHERE project_id=?", (pid,))
+    return {"locked": len(chars), "characters": DB.list(
+        "SELECT id,name,locked FROM characters WHERE project_id=? ORDER BY id", (pid,)
+    )}
+@app.get("/api/projects/{pid}/shots/roles-lock", dependencies=[Depends(auth)])
+def get_project_roles_lock(pid: str):
+    """角色的锁定状态（引擎事实，前端不再自己猜）。"""
+    chars = DB.list(
+        "SELECT id,name,locked FROM characters WHERE project_id=? ORDER BY id", (pid,)
+    )
+    return {
+        "locked": any(int(c.get("locked") or 0) for c in chars),
+        "characters": chars,
+    }
 class ShotRegenReq(BaseModel):
     ability: str | None = Field(default=None, pattern="^(image|video)$")
 @app.post("/api/projects/{pid}/shots/{shot_id}/regenerate", dependencies=[Depends(auth)])

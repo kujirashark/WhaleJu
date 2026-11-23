@@ -29,6 +29,17 @@ const firstAsset = computed(() => {
 const shotAssets = computed(() =>
   project.assets.filter((a: any) => a.url && (a.kind === 'shot' || a.kind === 'video')),
 )
+/**
+ * 第 6 步的镜头清单。
+ * 引擎的生成批次只在内存里，重启就没了 —— 素材其实已经落在库里。
+ * 这里用 visibleItems() 合并两者：实时状态取内存，画面取数据库。
+ */
+const visibleShots = computed(() => {
+  const live = gen.visibleItems() as any[]
+  if (live.length) return live
+  // 引擎没有批次时：直接用库里还原出来的镜头（画面 + 场景描述）
+  return (gen.persisted || []) as any[]
+})
 /** 第 1 步单一状态：任何时刻只呈现一种状态的信息，避免空态/忙碌/失败文案同屏打架。
  *  忙碌优先于「已有剧本」：重新生成时旧剧本还在，但界面必须显示进行中，
  *  否则用户点「重新生成这一稿」看不到任何反应。 */
@@ -324,15 +335,23 @@ function downloadWork() {
           <CallLogPanel v-if="hasCallLog" />
         </div>
       </template>
-      <!-- 第 2 步：只有引擎还停在这一步时才有确认动作 -->
+      <!-- 第 2 步：确认剧本 —— 所见即所得，直接看完整正文 -->
       <template v-else-if="step === 1">
         <div class="card-hd">第 2 步 · 确认剧本<span class="pill" :class="project.status === 'CP1_PENDING' ? 'p-wait' : 'p-ok'">{{ project.status === 'CP1_PENDING' ? '等你确认' : '已确认' }}</span></div>
         <div class="card-bd">
           <p>看看故事走向对不对。内容是刚生成的真实剧本。</p>
           <div v-if="script?.episodes?.length" style="margin-top:10px">
+            <!-- 分集大纲 -->
             <div v-for="(ep, i) in script.episodes" :key="i" class="ep">
               <span class="no">EP.{{ String(ep.idx || i + 1).padStart(2, '0') }}</span>
               <div><h5>{{ ep.title }}</h5><div class="tags"><span v-for="(t, j) in (ep.tags || [])" :key="j" class="tag">{{ t }}</span></div></div>
+            </div>
+            <!-- 正文全文：确认前就要看清每一句在讲什么 -->
+            <div class="script" style="margin-top:14px">
+              <template v-for="(ep, i) in script.episodes" :key="'body-' + i">
+                <p><b>第 {{ ep.idx || i + 1 }} 集 · {{ ep.title }}</b></p>
+                <p>{{ ep.script }}</p>
+              </template>
             </div>
           </div>
           <div v-else class="hint-warn">还没有剧本，请先回到第 1 步生成。</div>
@@ -387,13 +406,13 @@ function downloadWork() {
       </template>
       <!-- 第 4 步 -->
       <template v-else-if="step === 3">
-        <div class="card-hd">第 4 步 · 确认角色形象<span class="pill" :class="project.status === 'CP2_PENDING' ? 'p-wait' : 'p-ok'">{{ project.status === 'CP2_PENDING' ? '等你确认' : '已确认' }}</span></div>
+        <div class="card-hd">第 4 步 · 确认角色形象<span class="pill" :class="project.rolesLocked ? 'p-ok' : 'p-wait'">{{ project.rolesLocked ? '已确认' : '等你确认' }}</span></div>
         <div class="card-bd">
           <p>这 {{ project.selectedRoles.size }} 个形象会固定在镜头里。现在是：</p>
           <div class="rolegrid" style="margin-top:10px">
             <div v-for="r in project.characters.filter((c:any) => project.selectedRoles.has(c.id))" :key="r.id" class="role">
               <img v-if="roleImg(r)" :src="roleImg(r)" :alt="r.name" loading="lazy"><div v-else class="role-ph">无图</div>
-              <span class="lab">{{ r.name }}{{ project.status !== 'CP2_PENDING' ? ' · 已确认' : '' }}</span>
+              <span class="lab">{{ r.name }}{{ project.rolesLocked ? ' · 已确认' : '' }}</span>
             </div>
           </div>
           <div v-if="!project.selectedRoles.size" class="hint-warn">还没有选中的角色，请先回第 3 步生成并选择。</div>
@@ -412,7 +431,8 @@ function downloadWork() {
             <table class="table" style="margin-top:12px">
               <thead><tr><th>镜头</th><th>场景</th><th>类型</th></tr></thead>
               <tbody>
-                <tr v-for="s in shots.shots.slice(0, 6)" :key="s.idx">
+                <!-- 全部镜头都列出来：所见即所得，不给用户"只显示前 6 条"的错觉 -->
+                <tr v-for="s in shots.shots" :key="s.idx">
                   <td>{{ s.idx }}</td><td>{{ s.scene }}</td>
                   <td><span class="chip" :class="s.importance === 'key' ? 'c-key' : 'c-wait'">{{ s.importance === 'key' ? '重要' : '过渡' }}</span></td>
                 </tr>
@@ -468,11 +488,13 @@ function downloadWork() {
             <span class="big-num">{{ gen.total ? Math.round(done / gen.total * 100) : 0 }}%</span>
             <span style="font-size:11px;color:var(--ink3);font-family:var(--mono)">已完成 {{ done }} 个 · 失败 {{ gen.failed }} 个（不计费）<template v-if="gen.eta"> · 约 {{ gen.eta }} 秒</template></span>
           </div>
-          <!-- 镜头卡片：每个镜头都看得到真实画面（图片/视频），并能单独重生成 -->
+          <!-- 镜头卡片：每个镜头都看得到真实画面（图片/视频），并能单独重生成。
+               数据源是引擎的持久化素材（visibleItems），
+               引擎重启/刷新页面后画面依然在，不会变成一片空白。 -->
           <div class="shot-grid">
-            <div v-for="(it, idx) in gen.items" :key="it.shot_id" class="shot-card" :class="it.status">
+            <div v-for="(it, idx) in visibleShots" :key="it.shot_id" class="shot-card" :class="it.status">
               <div class="shot-thumb">
-                <video v-if="it.media_url && it.ability === 'video'"
+                <video v-if="it.media_url && it.kind === 'video'"
                        :src="project.assetUrl(it.media_url)"
                        controls muted playsinline preload="metadata"
                        @click.stop></video>
@@ -488,9 +510,9 @@ function downloadWork() {
                 <span v-else-if="it.status === 'failed'" class="shot-badge c-fail">失败</span>
               </div>
               <div class="shot-meta">
-                <div class="t">{{ it.scene_desc }}</div>
+                <div class="t">{{ it.scene_desc || `第 ${idx + 1} 镜` }}</div>
                 <div class="s">
-                  <template v-if="it.status === 'done'">已生成 · {{ it.ability === 'video' ? '视频' : '图片' }}</template>
+                  <template v-if="it.status === 'done'">已生成 · {{ it.kind === 'video' ? '视频' : '图片' }}</template>
                   <template v-else-if="it.status === 'running'">正在生成…</template>
                   <template v-else-if="it.status === 'failed'">{{ it.fail_reason || '生成失败' }}（不计费）</template>
                   <template v-else>排队中</template>
@@ -531,22 +553,24 @@ function downloadWork() {
       </template>
       <!-- 第 7 步：素材取自引擎 assets（刷新后仍在），不是内存态 -->
       <template v-else-if="step === 6">
-        <div class="card-hd">第 7 步 · 看成片<span class="pill p-info">{{ project.assets.length }} 段素材</span></div>
+        <div class="card-hd">第 7 步 · 看成片<span class="pill p-info">{{ visibleShots.length }} 段素材</span></div>
         <div class="card-bd">
-          <template v-if="shotAssets.length">
+          <template v-if="visibleShots.length">
             <p>这是模型真实生成的画面。点开看大图；不满意在第 6 步单独重生成对应镜头。</p>
             <!-- 全部镜头画面：能一眼看完这一集 -->
             <div class="shot-grid">
-              <div v-for="(a, i) in shotAssets" :key="a.id" class="shot-card">
+              <div v-for="(it, idx) in visibleShots" :key="it.shot_id" class="shot-card">
                 <div class="shot-thumb">
-                  <video v-if="a.kind === 'video'" :src="a.url" controls muted playsinline preload="metadata"></video>
-                  <img v-else :src="a.url" :alt="`第 ${i + 1} 镜`" loading="lazy" @click="window_open(a.url)">
-                  <span class="shot-no">第 {{ i + 1 }} 镜</span>
+                  <video v-if="it.media_url && it.kind === 'video'" :src="project.assetUrl(it.media_url)" controls muted playsinline preload="metadata"></video>
+                  <img v-else-if="it.media_url" :src="project.assetUrl(it.media_url)" :alt="`第 ${idx + 1} 镜`" loading="lazy" @click="window_open(project.assetUrl(it.media_url))">
+                  <div v-else class="shot-ph">{{ idx + 1 }}</div>
+                  <span class="shot-no">第 {{ idx + 1 }} 镜</span>
                 </div>
+                <div class="shot-meta"><div class="t">{{ it.scene_desc || `第 ${idx + 1} 镜` }}</div></div>
               </div>
             </div>
             <div class="acts" style="justify-content:center">
-              <button class="btn btn-s" @click="window_open(shotAssets[0].url)">在新窗口查看</button>
+              <button v-if="visibleShots[0].media_url" class="btn btn-s" @click="window_open(project.assetUrl(visibleShots[0].media_url))">在新窗口查看</button>
             </div>
             <div class="chat-hint" style="justify-content:center">
               在下方聊天框说「确认这一版」，我就去导出成片；说「重新生成画面」我就重跑镜头。
@@ -566,7 +590,7 @@ function downloadWork() {
       <template v-else>
         <div class="card-hd">第 8 步 · 导出视频<span class="pill" :class="project.exp.state === 'done' ? 'p-ok' : 'p-off'">{{ project.exp.state === 'done' ? '已导出' : project.exp.state === 'running' ? '导出中' : '未开始' }}</span></div>
         <div class="card-bd">
-          <p>导出设置好就可以发。默认竖屏，带字幕和 AI 生成标识。</p>
+          <p>导出设置好就可以发。默认竖屏 1080 × 1920，画面不带任何水印。</p>
           <div v-if="!hasMaterial" class="hint-warn" style="margin-top:12px">
             还没有真实画面可导出。完成第 6 步生成后，这里才能导出成片。
           </div>
@@ -617,9 +641,9 @@ function downloadWork() {
             <span style="font-size:11px;color:var(--ink3);font-family:var(--mono)">只导出本机真实生成的素材</span>
           </div>
           <div class="chat-hint">
-            在下方聊天框说「导出成片」，我就合成竖屏 MP4（带 AI 标识）。
+            在下方聊天框说「导出成片」，我就合成竖屏 MP4。
           </div>
-          <div class="note">已自动把「AI 生成」标识烧进画面。发布前仍需按平台要求勾选 AI 生成选项并完成备案。</div>
+          <div class="note">画面干净不带水印；「本视频由 AI 生成」的声明会写进成片元数据与发布文案，发布时按平台要求勾选 AI 生成选项即可。</div>
         </div>
       </template>
     </div>

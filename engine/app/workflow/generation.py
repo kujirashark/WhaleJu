@@ -93,6 +93,16 @@ POLL_INTERVAL_S = 1.5       # 异步视频厂商轮询间隔
 POLL_MAX_ROUNDS = 120       # 单镜头最多轮询轮数（约 3 分钟），超时按失败退回冻结
 def price_for(ability: str) -> float:
     return PRICE_PER_IMAGE if ability == "image" else PRICE_PER_SHOT
+def db_shot_id(project_id: str, shot_id: str) -> str:
+    """镜头在数据库里的唯一标识。
+    历史坑：曾经直接把 "s1" 这种短 ID 当 shots.id（全局主键），
+    于是项目 A 的第 1 镜会覆盖项目 B 的第 1 镜，
+    assets.shot_id 外键也跟着串到别的项目上 —— 换镜头重生成会拿错素材。
+    现在统一带上项目 ID。
+    """
+    if not project_id or shot_id.startswith(f"{project_id}_"):
+        return shot_id
+    return f"{project_id}_{shot_id}"
 def _is_capability_error(reason: str) -> bool:
     """判断错误是不是"厂商根本不支持这个能力"（而不是偶发失败）。
     典型场景：把图片模型填进「生成视频」槽，厂商返回 404/405，
@@ -135,6 +145,8 @@ class GenerationManager:
         """把这一批镜头写进 shots 表。
         为什么要写：assets.shot_id 有外键指向 shots(id)，不写就存不下
         "这张画面属于哪个镜头"，而"只重生成这一个镜头"必须靠这个关联。
+        镜头 ID 必须带项目前缀（db_shot_id）：shots.id 是全局主键，
+        用 "s1" 会让不同项目的第 1 镜互相覆盖，素材外键也跟着串台。
         """
         try:
             eps = self.db.list(
@@ -149,7 +161,8 @@ class GenerationManager:
                        VALUES(?,?,?,?,?,?,?,?,?)
                        ON CONFLICT(id) DO UPDATE SET scene_desc=excluded.scene_desc,
                                                    ability=excluded.ability""",
-                    (it.shot_id, ep_id, int(it.shot_id[1:]) if it.shot_id[1:].isdigit() else 0,
+                    (db_shot_id(project_id, it.shot_id), ep_id,
+                     int(it.shot_id[1:]) if it.shot_id[1:].isdigit() else 0,
                      it.scene_desc, it.scene_desc, "key", it.ability, "owned", "planned"),
                 )
         except Exception:  # noqa: BLE001 - shots 表写不进去不该阻断生成
@@ -189,10 +202,16 @@ class GenerationManager:
         老数据没写 assets.shot_id（没有精确关联），就按生成顺序取对应那一张，
         否则重生成后新旧两张都在，导出会多出一段重复画面。
         """
+        db_id = db_shot_id(project_id, shot_id)
         try:
             rows = self.db.list(
-                "SELECT id, local_path FROM assets WHERE project_id=? AND shot_id=?", (project_id, shot_id)
+                "SELECT id, local_path FROM assets WHERE project_id=? AND shot_id=?", (project_id, db_id)
             )
+            if not rows:
+                # 也可能是历史遗留的裸 shot_id（"s1"）
+                rows = self.db.list(
+                    "SELECT id, local_path FROM assets WHERE project_id=? AND shot_id=?", (project_id, shot_id)
+                )
             if not rows and index is not None:
                 legacy = self.db.list(
                     "SELECT id, local_path FROM assets WHERE project_id=? "
@@ -402,8 +421,11 @@ class GenerationManager:
         kind = "video" if looks_video else "shot"
         asset_id = ""
         if self.assets is not None and remote:
-            # shot_id 一起登记：这样"只重生成这一个镜头"能精确找到旧素材
-            asset = self.assets.save_remote(project_id, kind, remote, shot_id=item.shot_id)
+            # shot_id 一起登记：这样"只重生成这一个镜头"能精确找到旧素材。
+            # 用带项目前缀的库内 ID（db_shot_id），与 shots 表主键保持一致。
+            asset = self.assets.save_remote(
+                project_id, kind, remote, shot_id=db_shot_id(project_id, item.shot_id),
+            )
             if asset:
                 asset_id = asset["id"]
         if not asset_id:
