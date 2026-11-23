@@ -109,14 +109,18 @@ export const useGenStore = defineStore('gen', () => {
     const byShot = new Map(persisted.value.map((p) => [p.shot_id, p]))
     return live.map((it) => {
       const p = byShot.get(it.shot_id)
-      if (it.media_url) return it
-      return p ? {
+      if (!p) return it
+      // 库里的状态更权威：描述改过（edited）要盖过内存批次的 done
+      const status = p.status === 'edited' ? 'edited' : (it.media_url ? it.status : p.status)
+      if (it.media_url && status === it.status) return it
+      return {
         ...it,
-        media_url: p.media_url,
+        status,
+        media_url: it.media_url || p.media_url,
         asset_id: it.asset_id || p.asset_id,
         kind: p.kind || (it.ability === 'video' ? 'video' : 'image'),
-        scene_desc: it.scene_desc || p.scene_desc,
-      } : it
+        scene_desc: p.scene_desc || it.scene_desc,
+      }
     })
   }
   /**

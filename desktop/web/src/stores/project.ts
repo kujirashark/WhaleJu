@@ -283,6 +283,45 @@ export const useProjectStore = defineStore('project', () => {
       return { ok: false, error: contentError.value }
     } finally { contentBusy.value = false }
   }
+  /**
+   * 单独编辑某一镜：改场景描述 / 改重要度 / 调整顺序。
+   * 返回 stale_shots：这些镜头已经出过画面，改了描述要重新生成才生效。
+   */
+  async function updateShot(key: string, patch: { scene?: string; importance?: string; idx?: number })
+    : Promise<{ ok: boolean; error?: string; stale?: string[] }> {
+    if (!currentId.value) return { ok: false, error: '没有当前项目' }
+    const r = await engine.api<{ shots: any[]; changed: boolean; stale_shots: string[] }>(
+      `/api/projects/${currentId.value}/shots/${encodeURIComponent(key)}`,
+      { method: 'PUT', body: patch },
+    )
+    if (!r?.shots) {
+      return { ok: false, error: engine.error || '保存失败' }
+    }
+    shots.value = { ...(shots.value || {}), shots: r.shots }
+    return { ok: true, stale: r.stale_shots || [] }
+  }
+  /** 新增一个镜头（追加到末尾）。 */
+  async function addShot(scene: string, importance = 'transition')
+    : Promise<{ ok: boolean; error?: string }> {
+    if (!currentId.value) return { ok: false, error: '没有当前项目' }
+    const r = await engine.api<{ shots: any[] }>(`/api/projects/${currentId.value}/shots`, {
+      method: 'POST', body: { scene, importance },
+    })
+    if (!r?.shots) return { ok: false, error: engine.error || '新增失败' }
+    shots.value = { ...(shots.value || {}), shots: r.shots }
+    return { ok: true }
+  }
+  /** 删掉一个镜头（连同它已生成的画面）。 */
+  async function deleteShot(key: string): Promise<{ ok: boolean; error?: string }> {
+    if (!currentId.value) return { ok: false, error: '没有当前项目' }
+    const r = await engine.api<{ shots: any[] }>(
+      `/api/projects/${currentId.value}/shots/${encodeURIComponent(key)}`,
+      { method: 'DELETE' },
+    )
+    if (!r?.shots) return { ok: false, error: engine.error || '删除失败' }
+    shots.value = { ...(shots.value || {}), shots: r.shots }
+    return { ok: true }
+  }
   /** 最近一次创建的项目目标集数（引擎解析出来的，界面用它提示用户） */
   const createdEpisodeCount = ref(1)
   async function create(idea: string): Promise<boolean> {
@@ -382,6 +421,7 @@ export const useProjectStore = defineStore('project', () => {
     status, assets, maxStep, assetUrl, createdEpisodeCount,
     goto, confirmStep, lockRoles, create, loadProjects, loadDetail, remove, loadTrash, restore,
     genScript, genScriptStream, genShots, genCharacters, toggleRole,
+    updateShot, addShot, deleteShot,
     togglePlay, startExport, exportWork,
   }
 })

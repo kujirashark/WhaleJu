@@ -345,6 +345,24 @@ img{display:block}
 .shot-meta .t{font-size:11.5px;color:var(--ink);line-height:1.45;word-break:break-word}
 .shot-meta .s{font-size:10.5px;color:var(--ink3);margin-top:3px;line-height:1.4}
 .shot-regen{margin:6px 9px 9px;justify-content:center}
+/* ── 第5步分镜表：每一镜都能单独编辑/调整/增删 ────────────────── */
+.shot-plan{margin-top:12px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.sp-row{display:flex;gap:10px;align-items:flex-start;padding:9px 11px;border-bottom:1px solid var(--line);background:var(--panel)}
+.sp-row:last-child{border-bottom:none}
+.sp-row.editing{background:var(--panel2)}
+.sp-no{width:22px;flex-shrink:0;font-family:var(--mono);font-size:11.5px;color:var(--ink3);padding-top:2px}
+.sp-main{flex:1;min-width:0}
+.sp-scene{font-size:12.5px;color:var(--ink);line-height:1.5;word-break:break-word}
+.sp-scene .chip{margin-left:6px;vertical-align:middle}
+.sp-tag{margin-top:5px}
+.sp-ops{display:flex;gap:5px;flex-shrink:0;align-items:center}
+.sp-ops .btn{padding:3px 9px;font-size:11px}
+.sp-del{color:#ff6b6b}
+.sp-input{width:100%;border-radius:6px;padding:7px 9px;font-size:12.5px;background:var(--panel);color:var(--ink);border:1px solid var(--line);resize:vertical;line-height:1.5;font-family:inherit}
+.sp-input:focus{outline:none;border-color:var(--accent)}
+.sp-imp{display:flex;gap:14px;margin-top:7px;flex-wrap:wrap}
+.sp-radio{font-size:11.5px;color:var(--ink3);display:flex;align-items:center;gap:5px;cursor:pointer}
+.sp-radio input{accent-color:var(--accent)}
 /* ── 第1步实时生成：一集一集长出来 ─────────────────────────── */
 .gen-ep-progress{display:flex;gap:4px;align-items:center;flex-shrink:0;padding-top:2px}
 .gen-ep-progress .pip{width:7px;height:7px;border-radius:50%;background:var(--panel2);border:1px solid var(--line2)}

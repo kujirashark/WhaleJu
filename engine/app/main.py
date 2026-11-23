@@ -21,7 +21,7 @@ from .adapters.configured_provider import ConfiguredProvider
 from .adapters import call_log
 from .workflow.state_machine import GuardError, WorkflowEngine
 from .workflow.checkpoints import CheckpointManager
-from .workflow.generation import GenerationManager, PRICE_PER_IMAGE, PRICE_PER_SHOT
+from .workflow.generation import GenerationManager, PRICE_PER_IMAGE, PRICE_PER_SHOT, db_shot_id
 from .workflow.content import ContentGenerator, NoProviderError
 from .workflow.episode_spec import parse_episode_count
 from .agent.agent import ConversationAgent, Intent
@@ -507,6 +507,225 @@ async def generate_shots(pid: str, req: ShotsGenReq = ShotsGenReq()):
         return await CONTENT.generate_shots(pid, req.shot_count)
     except NoProviderError as exc:
         raise HTTPException(400, {"code": exc.code, "message": str(exc), "hint": "到设置里配置文本模型并测试连接"})
+# ── 分镜单独编辑 ──────────────────────────────────────────────────────
+# 用户要能单独改某一镜的描述、调整重要度、增删镜头。
+# 关键：镜头有稳定的 key（与序号解耦），编辑/重排/删除后，
+# 素材与镜头的关联依然指向"这一镜"，不会串台。
+class ShotEditReq(BaseModel):
+    scene: str | None = Field(default=None, max_length=800)
+    importance: str | None = Field(default=None, pattern="^(key|transition)$")
+    idx: int | None = Field(default=None, ge=1, le=999)   # 移到第几位
+class ShotAddReq(BaseModel):
+    scene: str = Field(min_length=1, max_length=800)
+    importance: str = Field(default="transition", pattern="^(key|transition)$")
+def _load_shot_plan(pid: str) -> list[dict]:
+    """读项目的分镜表，规范化成 [{key, idx, scene, importance}]。"""
+    p = DB.get("projects", pid) or {}
+    raw = p.get("shots_json")
+    items: list[dict] = []
+    if raw:
+        try:
+            data = json.loads(raw)
+            items = data.get("shots") or []
+        except (ValueError, TypeError, AttributeError):
+            items = []
+    out: list[dict] = []
+    for i, s in enumerate(items):
+        if not isinstance(s, dict):
+            continue
+        out.append({
+            # 老数据没有 key：退回序号形式（与历史素材的 legacy 兜底一致）
+            "key": str(s.get("key") or f"s{i + 1}"),
+            "idx": int(s.get("idx") or (i + 1)),
+            "scene": str(s.get("scene") or ""),
+            "importance": s.get("importance") if s.get("importance") in ("key", "transition") else "transition",
+        })
+    return out
+def _shot_rows_of(pid: str) -> list[dict]:
+    """该项目的镜头行（shots 表），用于删除素材与同步。"""
+    return DB.list(
+        "SELECT s.* FROM shots s JOIN episodes e ON e.id = s.episode_id WHERE e.project_id=?",
+        (pid,),
+    )
+def _drop_shot_media(pid: str, shot_key: str) -> int:
+    """删掉某一镜的素材（记录 + 本机文件）。删镜头时必须先删素材，
+    否则 assets.shot_id 的外键会让 shots 行删不掉。"""
+    db_id = db_shot_id(pid, shot_key)
+    rows = DB.list(
+        "SELECT id, local_path FROM assets WHERE project_id=? AND shot_id IN (?,?)",
+        (pid, db_id, shot_key),
+    )
+    n = 0
+    for r in rows:
+        try:
+            p = ASSETS.resolve(r["local_path"])
+            if p.exists() and p.is_file():
+                p.unlink()
+        except OSError:
+            pass
+        try:
+            DB.execute("DELETE FROM assets WHERE id=?", (r["id"],))
+            n += 1
+        except Exception:  # noqa: BLE001
+            pass
+    return n
+def _sync_shot_table(pid: str, plan: list[dict]) -> None:
+    """把分镜表同步进 shots 表（生成时的镜头行、素材外键都指向这里）。"""
+    try:
+        eps = DB.list(
+            "SELECT id FROM episodes WHERE project_id=? ORDER BY idx LIMIT 1", (pid,)
+        )
+        if not eps:
+            return
+        ep_id = eps[0]["id"]
+        keep = set()
+        for s in plan:
+            row_id = db_shot_id(pid, s["key"])
+            keep.add(row_id)
+            DB.execute(
+                """INSERT INTO shots(id,episode_id,idx,scene_desc,prompt,importance,ability,source,status)
+                   VALUES(?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE SET idx=excluded.idx,
+                                               scene_desc=excluded.scene_desc,
+                                               prompt=excluded.prompt,
+                                               importance=excluded.importance""",
+                (row_id, ep_id, s["idx"], s["scene"], s["scene"], s["importance"],
+                 "image", "owned", "planned"),
+            )
+        # 分镜表里已经没有的镜头行：连同素材一起清掉
+        for row in _shot_rows_of(pid):
+            if row["id"] not in keep:
+                try:
+                    _drop_shot_media(pid, row["id"].split("_", 1)[-1])
+                    DB.execute("DELETE FROM shots WHERE id=?", (row["id"],))
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception as exc:  # noqa: BLE001 - shots 表同步失败不该阻断编辑
+        print(f"[shots] 同步失败：{exc}")
+def _save_shot_plan(pid: str, plan: list[dict]) -> dict:
+    """保存分镜表（projects.shots_json 是权威）+ 同步 shots 表。"""
+    for i, s in enumerate(plan):
+        s["idx"] = i + 1
+    payload = {"shots": plan, "partial": False, "generated_at": utc_now()}
+    DB.execute(
+        "UPDATE projects SET shots_json=? WHERE id=?",
+        (json.dumps(payload, ensure_ascii=False), pid),
+    )
+    _sync_shot_table(pid, plan)
+    return payload
+def _stale_shots(pid: str, keys: list[str]) -> list[str]:
+    """哪些镜头已经有画面了（改了描述就需要重新生成才会生效）。
+    老项目的素材没写 shot_id（历史数据），这时按镜头在分镜表里的位置
+    兜底匹配 —— 否则改完描述却提示"不用重生成"，用户会以为已经生效。
+    """
+    if not keys:
+        return []
+    # 精确关联的素材
+    linked: set[str] = set()
+    for r in DB.list(
+        "SELECT shot_id FROM assets WHERE project_id=? AND shot_id IS NOT NULL", (pid,)
+    ):
+        sid = r["shot_id"]
+        linked.add(sid.split("_", 1)[1] if sid.startswith(f"{pid}_") else sid)
+    # 老数据：没有 shot_id 的镜头素材（按生成顺序对应镜头）
+    loose = DB.list(
+        "SELECT id FROM assets WHERE project_id=? AND shot_id IS NULL "
+        "AND (kind IN ('shot','video') OR (kind='image' AND character_id IS NULL)) "
+        "ORDER BY created_at",
+        (pid,),
+    )
+    plan = _load_shot_plan(pid)
+    out: list[str] = []
+    for k in keys:
+        if k in linked:
+            out.append(k)
+            continue
+        # 按顺序兜底：这一镜在分镜表里的位置
+        pos = next((i for i, s in enumerate(plan) if s["key"] == k), None)
+        if pos is not None and pos < len(loose):
+            out.append(k)
+    return out
+def _mark_shot_edited(pid: str, shot_key: str) -> None:
+    """镜头描述改了但画面还是旧的 → 标记为待重生成（shots.status='edited'）。"""
+    try:
+        DB.execute(
+            "UPDATE shots SET status='edited' WHERE id=?",
+            (db_shot_id(pid, shot_key),),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+@app.put("/api/projects/{pid}/shots/{shot_key}", dependencies=[Depends(auth)])
+def update_shot(pid: str, shot_key: str, req: ShotEditReq):
+    """单独编辑某一镜：改场景描述、改重要度、调整顺序。"""
+    p = DB.get("projects", pid)
+    if not p or p.get("deleted_at"):
+        raise HTTPException(404, "项目不存在或已被清理")
+    plan = _load_shot_plan(pid)
+    target = next((s for s in plan if s["key"] == shot_key), None)
+    if not target:
+        raise HTTPException(404, {"code": "E4009", "message": "找不到这个镜头", "hint": "分镜表可能已经变了，刷新一下再试"})
+    changed = False
+    if req.scene is not None:
+        scene = req.scene.strip()
+        if not scene:
+            raise HTTPException(400, {"code": "E4010", "message": "场景描述不能为空", "hint": "写清楚这一镜拍什么"})
+        if scene != target["scene"]:
+            target["scene"] = scene
+            changed = True
+    if req.importance is not None and req.importance != target["importance"]:
+        target["importance"] = req.importance
+        changed = True
+    if req.idx is not None and req.idx != target["idx"]:
+        plan.remove(target)
+        plan.insert(max(0, min(req.idx - 1, len(plan))), target)
+        changed = True
+    if changed:
+        payload = _save_shot_plan(pid, plan)
+        stale = _stale_shots(pid, [shot_key])
+        if stale:
+            # 描述改了、画面还是旧的 → 标记待重生成（持久化，刷新后还在）
+            _mark_shot_edited(pid, shot_key)
+    else:
+        payload = {"shots": plan}
+        stale = []
+    return {
+        "ok": True,
+        "shots": payload["shots"],
+        "changed": changed,
+        # 已经有画面的镜头改了描述：必须重新生成这一镜才会生效
+        "stale_shots": stale,
+    }
+@app.post("/api/projects/{pid}/shots", dependencies=[Depends(auth)])
+def add_shot(pid: str, req: ShotAddReq):
+    """新增一个镜头（追加到末尾）。"""
+    p = DB.get("projects", pid)
+    if not p or p.get("deleted_at"):
+        raise HTTPException(404, "项目不存在或已被清理")
+    plan = _load_shot_plan(pid)
+    if len(plan) >= 60:
+        raise HTTPException(400, {"code": "E4011", "message": "镜头最多 60 个", "hint": "先把不需要的镜头删掉"})
+    plan.append({
+        "key": f"sh_{ulid()}",
+        "idx": len(plan) + 1,
+        "scene": req.scene.strip(),
+        "importance": req.importance,
+    })
+    payload = _save_shot_plan(pid, plan)
+    return {"ok": True, "shots": payload["shots"], "key": plan[-1]["key"]}
+@app.delete("/api/projects/{pid}/shots/{shot_key}", dependencies=[Depends(auth)])
+def delete_shot(pid: str, shot_key: str):
+    """删掉一个镜头（连同它已生成的画面）。"""
+    p = DB.get("projects", pid)
+    if not p or p.get("deleted_at"):
+        raise HTTPException(404, "项目不存在或已被清理")
+    plan = _load_shot_plan(pid)
+    target = next((s for s in plan if s["key"] == shot_key), None)
+    if not target:
+        raise HTTPException(404, {"code": "E4009", "message": "找不到这个镜头", "hint": "分镜表可能已经变了，刷新一下再试"})
+    plan.remove(target)
+    _drop_shot_media(pid, shot_key)
+    payload = _save_shot_plan(pid, plan)
+    return {"ok": True, "shots": payload["shots"], "removed": shot_key}
 @app.post("/api/projects/{pid}/steps/{step}/advance", dependencies=[Depends(auth)])
 def advance(pid: str, step: int, req: AdvanceReq):
     p = DB.get("projects", pid)
@@ -1140,33 +1359,43 @@ def project_shots_media(pid: str):
     for r in rows:
         sid = r.get("shot_id")
         if sid:
-            # 库里可能是带项目前缀的 ID，统一剥成短号（s1）便于和批次对齐
-            short = sid.split("_", 1)[-1] if "_" in sid else sid
+            # 库里存的是带项目前缀的 ID（{project_id}_{key}），剥出 key
+            short = sid.split("_", 1)[1] if sid.startswith(f"{pid}_") else sid
             by_shot[short] = r
         else:
             loose.append(r)
-    # 2) 镜头清单：优先用 shots 表（新一轮生成会写），否则用项目里的分镜表
-    shot_rows = DB.list(
-        "SELECT s.id, s.idx, s.scene_desc, s.ability, s.status FROM shots s "
-        "JOIN episodes e ON e.id = s.episode_id WHERE e.project_id=? ORDER BY s.idx",
-        (pid,),
-    )
+    # 2) 镜头清单：优先用分镜表（用户可编辑，含稳定 key），其次 shots 表
+    plan = _load_shot_plan(pid)
     shots_meta: list[dict] = []
-    for s in shot_rows:
-        sid = s["id"]
-        short = sid.split("_", 1)[-1] if "_" in sid else sid
+    for s in plan:
         shots_meta.append({
-            "shot_id": short, "idx": s["idx"], "scene_desc": s["scene_desc"],
-            "ability": s["ability"], "status": "done",
+            "shot_id": s["key"], "idx": s["idx"],
+            "scene_desc": s["scene"], "ability": "image", "status": "done",
+            "importance": s["importance"],
         })
     if not shots_meta:
-        # 老项目 shots 表是空的：用项目里真实的分镜表还原镜头顺序
+        # 老项目分镜表是空的：用 shots 表还原
+        for s in _shot_rows_of(pid):
+            short = s["id"].split("_", 1)[1] if s["id"].startswith(f"{pid}_") else s["id"]
+            shots_meta.append({
+                "shot_id": short, "idx": s["idx"], "scene_desc": s["scene_desc"],
+                "ability": s["ability"], "status": "done", "importance": s["importance"],
+            })
+    if not shots_meta:
+        # 再兜底：项目里真实的分镜表（老结构）
         meta = loads(p.get("shots_json"), None) if p.get("shots_json") else None
         for i, sc in enumerate((meta or {}).get("shots") or [], start=1):
             shots_meta.append({
-                "shot_id": f"s{i}", "idx": sc.get("idx") or i,
-                "scene_desc": sc.get("scene") or "", "ability": "image", "status": "done",
+                "shot_id": sc.get("key") or f"s{i}", "idx": sc.get("idx") or i,
+                "scene_desc": sc.get("scene") or "", "ability": "image",
+                "status": "done", "importance": sc.get("importance") or "transition",
             })
+    # 镜头行的状态：edited = 描述改过、画面还是旧的（待重生成）
+    row_status = {r["id"]: r["status"] for r in _shot_rows_of(pid)}
+    for m in shots_meta:
+        st = row_status.get(db_shot_id(pid, m["shot_id"]))
+        if st == "edited":
+            m["status"] = "edited"
     items: list[dict] = []
     used_ids: set[str] = set()
     for i, m in enumerate(shots_meta):
@@ -1176,9 +1405,13 @@ def project_shots_media(pid: str):
             asset = loose[i]
         if asset is not None:
             used_ids.add(asset["id"])
+        # edited（描述改过、画面待更新）优先于 done/pending
+        st = m.get("status")
+        if st != "edited":
+            st = "done" if asset else "pending"
         items.append({
             **m,
-            "status": "done" if asset else "pending",
+            "status": st,
             "asset_id": asset["id"] if asset else None,
             "media_url": _asset_file_url(asset["id"] if asset else None),
             "kind": ("video" if asset["kind"] == "video" else "image") if asset else "image",

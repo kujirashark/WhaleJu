@@ -183,6 +183,90 @@ async function regenShot(it: any) {
     regenBusy.value = ''
   }
 }
+/* ── 第 5 步：分镜可以单独编辑、调整、增删 ──────────────────────────
+ * 用户要的是"分镜表能改"：改某一镜的描述、调整重要度、挪位置、加一镜、删一镜。
+ * 每个镜头有稳定 key，改动后素材关联不串台（引擎负责）。 */
+/** 正在编辑的镜头 key（空 = 没在编辑） */
+const editingShot = ref('')
+const editScene = ref('')
+const editImportance = ref<'key' | 'transition'>('transition')
+const shotBusy = ref(false)
+/** 改了描述但画面还是旧的镜头（引擎事实，刷新后仍在） */
+const staleShots = computed<Set<string>>(() => {
+  const s = new Set<string>()
+  for (const it of (gen.persisted || []) as any[]) {
+    if (it.status === 'edited') s.add(it.shot_id)
+  }
+  return s
+})
+/** 分镜表（引擎权威数据） */
+const shotPlan = computed<any[]>(() => shots.value?.shots || [])
+function startEditShot(s: any) {
+  editingShot.value = s.key
+  editScene.value = s.scene || ''
+  editImportance.value = s.importance === 'key' ? 'key' : 'transition'
+}
+function cancelEditShot() {
+  editingShot.value = ''
+}
+async function saveShot(s: any) {
+  if (!editScene.value.trim()) { ui.toast('场景描述不能为空'); return }
+  shotBusy.value = true
+  try {
+    const r = await project.updateShot(s.key, {
+      scene: editScene.value.trim(), importance: editImportance.value,
+    })
+    if (!r.ok) { ui.toast(r.error || '保存失败'); return }
+    editingShot.value = ''
+    // 刷新镜头清单：拿到"待重生成"标记（引擎事实）
+    if (project.currentId) await gen.loadPersisted(project.currentId)
+    if (r.stale?.length) ui.toast('已保存。重新生成这一镜才会用新描述', 4000)
+    else ui.toast('分镜已保存')
+  } finally {
+    shotBusy.value = false
+  }
+}
+/** 挪位置：把这一镜移到第 n 位 */
+async function moveShot(s: any, dir: -1 | 1) {
+  const target = (s.idx || 0) + dir
+  if (target < 1 || target > shotPlan.value.length) return
+  shotBusy.value = true
+  try {
+    const r = await project.updateShot(s.key, { idx: target })
+    if (!r.ok) ui.toast(r.error || '调整顺序失败')
+  } finally {
+    shotBusy.value = false
+  }
+}
+/** 新增一镜 */
+async function doAddShot() {
+  const scene = window.prompt('新镜头拍什么？', '新镜头：')
+  if (scene === null) return
+  if (!scene.trim()) { ui.toast('场景描述不能为空'); return }
+  shotBusy.value = true
+  try {
+    const r = await project.addShot(scene.trim())
+    if (!r.ok) ui.toast(r.error || '新增失败')
+    else ui.toast('已加一镜')
+  } finally {
+    shotBusy.value = false
+  }
+}
+/** 删一镜（连同它已生成的画面） */
+async function doDeleteShot(s: any) {
+  if (!window.confirm(`删掉第 ${s.idx} 镜？\n「${s.scene || '（无描述）'}」\n它已经生成的画面也会一起删掉。`)) return
+  shotBusy.value = true
+  try {
+    const r = await project.deleteShot(s.key)
+    if (!r.ok) ui.toast(r.error || '删除失败')
+    else {
+      if (project.currentId) await gen.loadPersisted(project.currentId)
+      ui.toast('已删掉这一镜')
+    }
+  } finally {
+    shotBusy.value = false
+  }
+}
 /** 体积格式化：用户看得懂的 MB / GB。 */
 function prettySize(n?: number | null): string {
   const b = Number(n || 0)
@@ -424,26 +508,67 @@ function downloadWork() {
       </template>
       <!-- 第 5 步 -->
       <template v-else-if="step === 4">
-        <div class="card-hd">第 5 步 · 拆分镜头<span class="pill p-info">{{ shots?.shots?.length || 0 }} 个镜头</span></div>
+        <div class="card-hd">第 5 步 · 拆分镜头<span class="pill p-info">{{ shotPlan.length }} 个镜头</span></div>
         <div class="card-bd">
-          <template v-if="shots?.shots?.length">
-            <p>由你配置的文本模型拆分，共 <b>{{ shots.shots.length }}</b> 个镜头，已保存到本机。</p>
-            <table class="table" style="margin-top:12px">
-              <thead><tr><th>镜头</th><th>场景</th><th>类型</th></tr></thead>
-              <tbody>
-                <!-- 全部镜头都列出来：所见即所得，不给用户"只显示前 6 条"的错觉 -->
-                <tr v-for="s in shots.shots" :key="s.idx">
-                  <td>{{ s.idx }}</td><td>{{ s.scene }}</td>
-                  <td><span class="chip" :class="s.importance === 'key' ? 'c-key' : 'c-wait'">{{ s.importance === 'key' ? '重要' : '过渡' }}</span></td>
-                </tr>
-              </tbody>
-            </table>
+          <template v-if="shotPlan.length">
+            <p>由你配置的文本模型拆分，共 <b>{{ shotPlan.length }}</b> 个镜头，已保存到本机。<b>每一镜都可以单独改</b>。</p>
+            <!-- 分镜表：可编辑、可调整、可增删 -->
+            <div class="shot-plan">
+              <div v-for="s in shotPlan" :key="s.key" class="sp-row" :class="{ editing: editingShot === s.key }">
+                <div class="sp-no">{{ s.idx }}</div>
+                <!-- 普通态：只读展示 -->
+                <template v-if="editingShot !== s.key">
+                  <div class="sp-main">
+                    <div class="sp-scene">
+                      {{ s.scene }}
+                      <span v-if="staleShots.has(s.key)" class="chip c-wait" title="描述已改，重新生成这一镜才会生效">待重生成</span>
+                    </div>
+                    <div class="sp-tag">
+                      <span class="chip" :class="s.importance === 'key' ? 'c-key' : 'c-wait'">{{ s.importance === 'key' ? '重要' : '过渡' }}</span>
+                    </div>
+                  </div>
+                  <div class="sp-ops">
+                    <button class="btn btn-s" @click="startEditShot(s)">编辑</button>
+                    <button class="btn btn-s" :disabled="shotBusy || s.idx <= 1" @click="moveShot(s, -1)" title="上移">↑</button>
+                    <button class="btn btn-s" :disabled="shotBusy || s.idx >= shotPlan.length" @click="moveShot(s, 1)" title="下移">↓</button>
+                    <button class="btn btn-s sp-del" :disabled="shotBusy" @click="doDeleteShot(s)" title="删掉这一镜">删</button>
+                  </div>
+                </template>
+                <!-- 编辑态：行内改描述与重要度 -->
+                <template v-else>
+                  <div class="sp-main">
+                    <textarea
+                      v-model="editScene"
+                      class="sp-input"
+                      rows="3"
+                      placeholder="这一镜拍什么？写得越具体，生成越准"
+                      aria-label="镜头场景描述"></textarea>
+                    <div class="sp-imp">
+                      <label class="sp-radio">
+                        <input type="radio" value="key" v-model="editImportance"> 重要镜头（画质优先）
+                      </label>
+                      <label class="sp-radio">
+                        <input type="radio" value="transition" v-model="editImportance"> 过渡镜头（成本优先）
+                      </label>
+                    </div>
+                  </div>
+                  <div class="sp-ops">
+                    <button class="btn btn-p" :disabled="shotBusy" @click="saveShot(s)">保存</button>
+                    <button class="btn btn-s" :disabled="shotBusy" @click="cancelEditShot">取消</button>
+                  </div>
+                </template>
+              </div>
+            </div>
+            <div class="acts">
+              <button class="btn btn-s" :disabled="shotBusy" @click="doAddShot">+ 加一个镜头</button>
+              <span style="font-size:11px;color:var(--ink3);font-family:var(--mono)">改动已保存到本机</span>
+            </div>
             <div class="chat-hint">
               在下方聊天框说「生成画面」，我就按这个方案开跑；说「重新拆镜头」我就重拆。
             </div>
             <div class="note">
-              预计生成 {{ shots?.shots?.length || 12 }} 张画面，每张 1.5 额度，共约
-              {{ Math.round((shots?.shots?.length || 12) * 1.5 * 10) / 10 }} 额度；
+              预计生成 {{ shotPlan.length }} 张画面，每张 1.5 额度，共约
+              {{ Math.round(shotPlan.length * 1.5 * 10) / 10 }} 额度；
               用你自己的 API 密钥则不消耗平台额度。生成失败不计费。
             </div>
             <div v-if="gen.lastError" class="hint-warn">
@@ -508,11 +633,13 @@ function downloadWork() {
                 <span class="shot-no">第 {{ idx + 1 }} 镜</span>
                 <span v-if="it.status === 'running'" class="shot-badge c-run">生成中</span>
                 <span v-else-if="it.status === 'failed'" class="shot-badge c-fail">失败</span>
+                <span v-else-if="it.status === 'edited'" class="shot-badge c-wait">待重生成</span>
               </div>
               <div class="shot-meta">
                 <div class="t">{{ it.scene_desc || `第 ${idx + 1} 镜` }}</div>
                 <div class="s">
-                  <template v-if="it.status === 'done'">已生成 · {{ it.kind === 'video' ? '视频' : '图片' }}</template>
+                  <template v-if="it.status === 'edited'">描述已改，点「重新生成」才会用新描述</template>
+                  <template v-else-if="it.status === 'done'">已生成 · {{ it.kind === 'video' ? '视频' : '图片' }}</template>
                   <template v-else-if="it.status === 'running'">正在生成…</template>
                   <template v-else-if="it.status === 'failed'">{{ it.fail_reason || '生成失败' }}（不计费）</template>
                   <template v-else>排队中</template>

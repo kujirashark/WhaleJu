@@ -29,6 +29,8 @@ class ShotProgress:
     asset_ref: str | None = None    # 真实生成素材引用（厂商 URL / 本地路径）
     asset_id: str | None = None     # 本机素材 id：界面拿它读缩略图/视频，永久有效
     ability: str = "image"          # 这一镜用哪种能力生成（image=画面 / video=视频）
+    idx: int = 0                    # 分镜表里的序号（展示用，与 shot_id 解耦）
+    importance: str = "transition"  # key=重要镜头 / transition=过渡镜头
 @dataclass
 class Batch:
     id: str
@@ -132,9 +134,14 @@ class GenerationManager:
             return existing
         batch = Batch(id=ulid(), project_id=project_id, total=shot_count)
         scenes = self._scenes_from_project(project_id, shot_count)
+        # shot_id 用镜头的稳定 key（不是序号）：用户重排/删除镜头后，
+        # 素材关联依然指向"这一镜"，不会串到别的镜头上去。
         batch.items = [
-            ShotProgress(shot_id=f"s{i + 1}", scene_desc=scenes[i], ability=ability)
-            for i in range(shot_count)
+            ShotProgress(
+                shot_id=sc["key"], scene_desc=sc["scene"], ability=ability,
+                idx=sc.get("idx") or (i + 1), importance=sc.get("importance") or "transition",
+            )
+            for i, sc in enumerate(scenes[:shot_count])
         ]
         self._sync_shot_rows(project_id, batch.items)
         self.batches[batch.id] = batch
@@ -160,10 +167,12 @@ class GenerationManager:
                     """INSERT INTO shots(id,episode_id,idx,scene_desc,prompt,importance,ability,source,status)
                        VALUES(?,?,?,?,?,?,?,?,?)
                        ON CONFLICT(id) DO UPDATE SET scene_desc=excluded.scene_desc,
+                                                   prompt=excluded.prompt,
+                                                   idx=excluded.idx,
+                                                   importance=excluded.importance,
                                                    ability=excluded.ability""",
-                    (db_shot_id(project_id, it.shot_id), ep_id,
-                     int(it.shot_id[1:]) if it.shot_id[1:].isdigit() else 0,
-                     it.scene_desc, it.scene_desc, "key", it.ability, "owned", "planned"),
+                    (db_shot_id(project_id, it.shot_id), ep_id, it.idx or 0,
+                     it.scene_desc, it.scene_desc, it.importance, it.ability, "owned", "planned"),
                 )
         except Exception:  # noqa: BLE001 - shots 表写不进去不该阻断生成
             pass
@@ -179,6 +188,10 @@ class GenerationManager:
         if idx is None:
             raise RuntimeError(f"找不到镜头 {shot_id}")
         item = batch.items[idx]
+        # 用用户在第 5 步改过的最新描述：编辑了分镜却重生成旧画面，是最让人抓狂的 bug
+        latest = self._shot_scene_from_plan(project_id, item.shot_id)
+        if latest:
+            item.scene_desc = latest
         # 旧画面作废：否则导出时新旧两张都会被拼进去
         self._drop_shot_assets(project_id, shot_id, idx)
         item.status = "queued"
@@ -233,12 +246,14 @@ class GenerationManager:
                 self.db.execute("DELETE FROM assets WHERE id=?", (r["id"],))
             except Exception:  # noqa: BLE001
                 pass
-    def _scenes_from_project(self, project_id: str, shot_count: int) -> list[str]:
+    def _scenes_from_project(self, project_id: str, shot_count: int) -> list[dict]:
         """镜头描述必须来自用户第 5 步确认的真实分镜表。
         过去这里用的是写死的示例场景，导致生成的画面和用户看到的镜头表对不上，
         画面里出现的是程序自己编的场景。
+        现在用户可以单独编辑分镜（见 /api/projects/{pid}/shots 的编辑端点），
+        所以这里读的是**编辑后的最新**分镜表。
         """
-        scenes: list[str] = []
+        scenes: list[dict] = []
         try:
             row = self.db.get("projects", project_id) or {}
         except Exception:  # noqa: BLE001
@@ -247,15 +262,45 @@ class GenerationManager:
         if raw:
             try:
                 data = json.loads(raw)
-                for s in (data.get("shots") or [])[:shot_count]:
+                for i, s in enumerate((data.get("shots") or [])[:shot_count]):
                     desc = str(s.get("scene") or "").strip()
-                    if desc:
-                        scenes.append(desc)
+                    if not desc:
+                        continue
+                    scenes.append({
+                        # 老数据没有 key：退回序号形式（素材关联走 legacy 兜底）
+                        "key": str(s.get("key") or f"s{i + 1}"),
+                        "scene": desc,
+                        "importance": s.get("importance") if s.get("importance") in ("key", "transition") else "transition",
+                        "idx": int(s.get("idx") or (i + 1)),
+                    })
             except (ValueError, TypeError, AttributeError):
                 scenes = []
         while len(scenes) < shot_count:
-            scenes.append(SCENES[len(scenes) % len(SCENES)])
+            n = len(scenes)
+            scenes.append({
+                "key": f"s{n + 1}",
+                "scene": SCENES[n % len(SCENES)],
+                "importance": "transition",
+                "idx": n + 1,
+            })
         return scenes
+    def _shot_scene_from_plan(self, project_id: str, shot_id: str) -> str:
+        """从分镜表里取某一镜的**最新**描述。
+        单镜重生成时必须用用户改过的描述，否则"编辑了分镜但重生成还是旧画面"。
+        """
+        try:
+            row = self.db.get("projects", project_id) or {}
+            raw = row.get("shots_json")
+            if not raw:
+                return ""
+            data = json.loads(raw)
+            for i, s in enumerate(data.get("shots") or []):
+                key = str(s.get("key") or f"s{i + 1}")
+                if key == shot_id:
+                    return str(s.get("scene") or "")
+        except (ValueError, TypeError, AttributeError):
+            return ""
+        return ""
     async def pause(self, project_id: str) -> dict[str, Any] | None:
         batch = self.current(project_id)
         if not batch:

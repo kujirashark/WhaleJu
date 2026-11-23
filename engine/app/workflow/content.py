@@ -10,7 +10,7 @@ import re
 from ..adapters.base import ImageGenRequest, TextGenRequest
 from ..adapters.registry import ProviderRegistry
 from ..storage.db import Database
-from ..storage.util import utc_now
+from ..storage.util import ulid, utc_now
 class NoProviderError(Exception):
     def __init__(self, message: str, code: str = "E4001"):
         super().__init__(message)
@@ -206,6 +206,16 @@ class ContentGenerator:
         raw = await self._ask(prompt, system)
         data, partial = self._parse_json_lenient(raw, kind="shots")
         shots = data.get("shots") or []
+        # 每个镜头分配一个稳定的 key：用户之后要能单独编辑/重排/删除镜头，
+        # 素材与镜头的关联必须跟着"这一镜"走，而不是跟着序号走。
+        # 序号变了（第 2 镜变成第 1 镜），key 不变，关联才不会串台。
+        for i, s in enumerate(shots):
+            if not isinstance(s, dict):
+                continue
+            if not s.get("key"):
+                s["key"] = f"sh_{ulid()}"
+            if not s.get("idx"):
+                s["idx"] = i + 1
         payload = {"shots": shots, "partial": partial, "generated_at": utc_now()}
         with self.db.tx() as c:
             c.execute("UPDATE projects SET shots_json=? WHERE id=?",
