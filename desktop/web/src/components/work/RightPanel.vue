@@ -34,7 +34,10 @@ onMounted(() => { if (tab.value === 'calls') calls.load(80) })
       <template v-if="tab === 'shots'">
         <div v-if="!gen.items.length" class="empty-mini">还没有生成镜头，开始生成后这里显示引擎的真实状态。</div>
         <div v-for="(it, i) in gen.items" :key="it.shot_id" class="row">
-          <div class="row-ph">{{ i + 1 }}</div>
+          <!-- 缩略图：右侧也要看得见真实画面，不能只有一行字 -->
+          <img v-if="it.media_url && it.ability !== 'video'" class="row-thumb" :src="project.assetUrl(it.media_url)" alt="" loading="lazy">
+          <div v-else-if="it.media_url" class="row-thumb video-thumb"><span>▶</span></div>
+          <div v-else class="row-ph">{{ i + 1 }}</div>
           <div class="m"><div class="t">{{ i + 1 }}. {{ it.scene_desc }}</div><div class="s">{{ it.fail_reason || '真实生成任务' }}</div></div>
           <span class="chip" :class="statusChip(it.status).cls">{{ statusChip(it.status).text }}</span>
         </div>

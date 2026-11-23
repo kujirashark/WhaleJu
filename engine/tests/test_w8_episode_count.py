@@ -13,14 +13,12 @@ from engine.app.main import app, DB, LOCAL_TOKEN, REGISTRY
 from engine.app.adapters.base import ProviderMeta
 from engine.app.workflow.episode_spec import parse_episode_count
 from engine.app.workflow.content import ContentGenerator
+from engine.tests.conftest import truncate_all
 HEADERS = {"X-Local-Token": LOCAL_TOKEN}
 @pytest.fixture(autouse=True)
 def clean_db():
     DB.init_schema()
-    with DB.tx() as c:
-        for t in ("generation_tasks", "shots", "episodes", "checkpoints", "assets",
-                  "usage_events", "characters", "projects", "model_configs"):
-            c.execute(f"DELETE FROM {t}")
+    truncate_all(DB)
     REGISTRY.clear()
 # ── 解析器 ────────────────────────────────────────────────────────
 def test_parse_defaults_to_one_episode():

@@ -20,6 +20,10 @@ export interface GenItem {
   status: string
   cost: number
   asset_ref?: string | null
+  asset_id?: string | null
+  /** 引擎给的本机素材地址（图片或视频，永久有效） */
+  media_url?: string | null
+  ability?: string
   fail_reason?: string | null
 }
 export const useGenStore = defineStore('gen', () => {
@@ -128,6 +132,33 @@ export const useGenStore = defineStore('gen', () => {
     if (p) apply(p)
     if (p && total.value > 0 && done.value >= total.value && !paused.value) stopPolling()
   }
+  /**
+   * 只重新生成某一个镜头（其它镜头不动）。
+   * 用户要的是"这张不满意，换一张"，整批重跑等于白烧一轮额度。
+   */
+  async function regenerateShot(projectId: string, shotId: string, ability?: 'image' | 'video') {
+    const r = await engine.api<{ ok: boolean; shot_id: string; media_url?: string; fail_reason?: string }>(
+      `/api/projects/${projectId}/shots/${shotId}/regenerate`,
+      { method: 'POST', body: { ability: ability || null } },
+    )
+    if (!r) {
+      lastError.value = engine.error || '重新生成失败'
+      return { ok: false, error: lastError.value }
+    }
+    // 把新素材写回列表对应位置，界面立刻显示新画面
+    const idx = items.value.findIndex((i) => i.shot_id === shotId)
+    if (idx >= 0 && r.media_url) {
+      items.value[idx] = {
+        ...items.value[idx],
+        status: 'done',
+        asset_id: (r as any).asset_id ?? items.value[idx].asset_id,
+        media_url: r.media_url,
+        fail_reason: null,
+      }
+      apply({ items: items.value, done: done.value, total: total.value, failed: failed.value })
+    }
+    return { ok: true, media_url: r.media_url }
+  }
   /** 刷新页面后恢复进行中的批次：进度在引擎里，这里重新拉一次并继续盯。 */
   async function restore(projectId: string) {
     stopPolling()
@@ -152,6 +183,6 @@ export const useGenStore = defineStore('gen', () => {
     batchId, done, total, running, failed, queued, paused, eta, items, failedItems,
     routeReason, lastError, lastErrorCode, lastErrorHint, lastErrorNeed, lastErrorBalance,
     fatalReason, ability, unitPrice, estimatedCost, billing, notStarted,
-    start, poll, restore, pause, resume, stopPolling, reset,
+    start, poll, restore, pause, resume, stopPolling, reset, regenerateShot,
   }
 })

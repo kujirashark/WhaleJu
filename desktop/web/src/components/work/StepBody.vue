@@ -25,6 +25,10 @@ const firstAsset = computed(() => {
   const live = gen.items.find((i: any) => i.status === 'done' && i.asset_ref)
   return live?.asset_ref || null
 })
+/** 全部镜头画面（第 7 步网格）：定妆图不算成片画面 */
+const shotAssets = computed(() =>
+  project.assets.filter((a: any) => a.url && (a.kind === 'shot' || a.kind === 'video')),
+)
 /** 第 1 步单一状态：任何时刻只呈现一种状态的信息，避免空态/忙碌/失败文案同屏打架。
  *  忙碌优先于「已有剧本」：重新生成时旧剧本还在，但界面必须显示进行中，
  *  否则用户点「重新生成这一稿」看不到任何反应。 */
@@ -148,6 +152,26 @@ onMounted(async () => {
 })
 /* 流程动作全部交给聊天窗口（见 stores/agent.ts）：
  * 这里只保留"看内容"和"取产物"两类动作，生成/确认/推进一律由 agent 执行。 */
+/** 正在重生成的镜头（避免重复点击） */
+const regenBusy = ref('')
+/**
+ * 只重新生成这一个镜头。
+ * 整批重跑等于白烧一轮额度；用户要的是"这张换一张"。
+ */
+async function regenShot(it: any) {
+  const pid = project.currentId
+  if (!pid || regenBusy.value) return
+  regenBusy.value = it.shot_id
+  try {
+    const r = await gen.regenerateShot(pid, it.shot_id)
+    if (r.ok) ui.toast(`第 ${it.shot_id.replace('s', '')} 镜已重新生成`)
+    else ui.toast(r.error || '重新生成失败')
+    // 素材变了，项目的真实素材列表也要跟着刷新
+    await project.loadDetail()
+  } finally {
+    regenBusy.value = ''
+  }
+}
 /** 体积格式化：用户看得懂的 MB / GB。 */
 function prettySize(n?: number | null): string {
   const b = Number(n || 0)
@@ -444,20 +468,39 @@ function downloadWork() {
             <span class="big-num">{{ gen.total ? Math.round(done / gen.total * 100) : 0 }}%</span>
             <span style="font-size:11px;color:var(--ink3);font-family:var(--mono)">已完成 {{ done }} 个 · 失败 {{ gen.failed }} 个（不计费）<template v-if="gen.eta"> · 约 {{ gen.eta }} 秒</template></span>
           </div>
-          <table class="table" style="margin-top:12px">
-            <thead><tr><th>镜头</th><th>场景</th><th>状态</th></tr></thead>
-            <tbody>
-              <tr v-for="(it, idx) in gen.items" :key="it.shot_id">
-                <td>{{ idx + 1 }}</td><td>{{ it.scene_desc }}</td>
-                <td style="text-align:right">
-                  <span v-if="it.status === 'done'" class="chip c-ok">可用</span>
-                  <span v-else-if="it.status === 'running'" class="chip c-run">生成中</span>
-                  <span v-else-if="it.status === 'failed'" class="chip c-fail" :title="it.fail_reason || ''">失败</span>
-                  <span v-else class="chip c-wait">排队中</span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          <!-- 镜头卡片：每个镜头都看得到真实画面（图片/视频），并能单独重生成 -->
+          <div class="shot-grid">
+            <div v-for="(it, idx) in gen.items" :key="it.shot_id" class="shot-card" :class="it.status">
+              <div class="shot-thumb">
+                <video v-if="it.media_url && it.ability === 'video'"
+                       :src="project.assetUrl(it.media_url)"
+                       controls muted playsinline preload="metadata"
+                       @click.stop></video>
+                <img v-else-if="it.media_url" :src="project.assetUrl(it.media_url)"
+                     :alt="`第 ${idx + 1} 镜：${it.scene_desc}`" loading="lazy"
+                     @click.stop="window_open(project.assetUrl(it.media_url))">
+                <div v-else class="shot-ph">
+                  <span v-if="it.status === 'running'" class="busy-dot"></span>
+                  <span v-else>{{ idx + 1 }}</span>
+                </div>
+                <span class="shot-no">第 {{ idx + 1 }} 镜</span>
+                <span v-if="it.status === 'running'" class="shot-badge c-run">生成中</span>
+                <span v-else-if="it.status === 'failed'" class="shot-badge c-fail">失败</span>
+              </div>
+              <div class="shot-meta">
+                <div class="t">{{ it.scene_desc }}</div>
+                <div class="s">
+                  <template v-if="it.status === 'done'">已生成 · {{ it.ability === 'video' ? '视频' : '图片' }}</template>
+                  <template v-else-if="it.status === 'running'">正在生成…</template>
+                  <template v-else-if="it.status === 'failed'">{{ it.fail_reason || '生成失败' }}（不计费）</template>
+                  <template v-else>排队中</template>
+                </div>
+              </div>
+              <button class="btn btn-s shot-regen" :disabled="regenBusy === it.shot_id" @click="regenShot(it)">
+                {{ regenBusy === it.shot_id ? '重生成中…' : '重新生成' }}
+              </button>
+            </div>
+          </div>
           <div v-if="gen.fatalReason" class="hint-warn">
             <div><b>生成已停下：</b>{{ gen.fatalReason }}</div>
             <div class="acts" style="margin-top:10px">
@@ -490,13 +533,20 @@ function downloadWork() {
       <template v-else-if="step === 6">
         <div class="card-hd">第 7 步 · 看成片<span class="pill p-info">{{ project.assets.length }} 段素材</span></div>
         <div class="card-bd">
-          <template v-if="firstAsset">
-            <p>这是模型真实生成的画面。点开查看，不满意可回第 6 步重新生成对应镜头。</p>
-            <div class="player" style="margin-top:14px">
-              <img :src="firstAsset" alt="生成的真实画面">
+          <template v-if="shotAssets.length">
+            <p>这是模型真实生成的画面。点开看大图；不满意在第 6 步单独重生成对应镜头。</p>
+            <!-- 全部镜头画面：能一眼看完这一集 -->
+            <div class="shot-grid">
+              <div v-for="(a, i) in shotAssets" :key="a.id" class="shot-card">
+                <div class="shot-thumb">
+                  <video v-if="a.kind === 'video'" :src="a.url" controls muted playsinline preload="metadata"></video>
+                  <img v-else :src="a.url" :alt="`第 ${i + 1} 镜`" loading="lazy" @click="window_open(a.url)">
+                  <span class="shot-no">第 {{ i + 1 }} 镜</span>
+                </div>
+              </div>
             </div>
             <div class="acts" style="justify-content:center">
-              <button class="btn btn-s" @click="window_open(firstAsset)">在新窗口查看</button>
+              <button class="btn btn-s" @click="window_open(shotAssets[0].url)">在新窗口查看</button>
             </div>
             <div class="chat-hint" style="justify-content:center">
               在下方聊天框说「确认这一版」，我就去导出成片；说「重新生成画面」我就重跑镜头。
@@ -532,6 +582,11 @@ function downloadWork() {
           <div v-if="project.exp.state === 'running'" class="progress solid" style="margin-top:16px"><i :style="{ width: `${project.exp.pct}%` }"></i></div>
           <!-- 真实产物：格式、体积、时长都来自引擎实际写出的文件 -->
           <div v-if="project.exp.state === 'done' && project.expResult" class="exp-card">
+            <!-- 导完就能看：不用先下载再打开 -->
+            <video v-if="project.expResult.format === 'mp4' && project.expResult.preview_url"
+                   class="work-preview"
+                   :src="project.assetUrl(project.expResult.preview_url)"
+                   controls playsinline preload="metadata"></video>
             <div class="exp-hd">
               <span class="dot" :class="project.expResult.format === 'mp4' ? 'ok' : 'warn'"></span>
               {{ project.expResult.format === 'mp4' ? '成片已生成' : '画面素材包已导出' }}

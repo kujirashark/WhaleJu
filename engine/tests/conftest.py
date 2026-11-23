@@ -18,3 +18,21 @@ def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001
         shutil.rmtree(_TEST_DATA_DIR, ignore_errors=True)
     except OSError:
         pass
+# 业务表的清理顺序：关掉外键检查后顺序就不重要了
+# （assets.shot_id 会指向 shots.id，shots.episode_id 指向 episodes.id，
+#  按固定顺序删迟早会因为外键报错 —— 与其维护顺序，不如直接关检查）
+_TABLES = (
+    "generation_tasks", "shots", "episodes", "checkpoints", "assets",
+    "usage_events", "characters", "projects", "model_configs",
+)
+def truncate_all(db) -> None:
+    """清空所有业务表，用于每例前重置。"""
+    conn = db.connect()
+    try:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        for t in _TABLES:
+            conn.execute(f"DELETE FROM {t}")
+        conn.execute("UPDATE credit_wallet SET balance=86.4, frozen=0 WHERE id=1")
+        conn.commit()
+    finally:
+        conn.close()

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from engine.app.main import app, DB, LOCAL_TOKEN, REGISTRY, ASSETS
 from engine.app.adapters.base import GenResult, ImageGenRequest, ProviderMeta, VideoGenRequest
 from engine.app.storage.util import ulid
+from engine.tests.conftest import truncate_all
 HEADERS = {"X-Local-Token": LOCAL_TOKEN}
 PNG_1x1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
@@ -19,11 +20,7 @@ PNG_1x1 = base64.b64decode(
 @pytest.fixture(autouse=True)
 def clean_db():
     DB.init_schema()
-    with DB.tx() as c:
-        for t in ("generation_tasks", "shots", "episodes", "checkpoints", "assets",
-                  "usage_events", "characters", "projects", "model_configs"):
-            c.execute(f"DELETE FROM {t}")
-        c.execute("UPDATE credit_wallet SET balance=86.4, frozen=0 WHERE id=1")
+    truncate_all(DB)
     REGISTRY.clear()
 class _LocalImageProvider:
     """返回本机 HTTP 图片地址的假 Provider（不接触真实厂商）。"""

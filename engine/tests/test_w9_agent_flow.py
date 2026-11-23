@@ -14,14 +14,12 @@ from fastapi.testclient import TestClient
 import pytest
 from engine.app.main import app, DB, LOCAL_TOKEN
 from engine.app.agent.agent import ConversationAgent, ALLOWED_TOOLS
+from engine.tests.conftest import truncate_all
 HEADERS = {"X-Local-Token": LOCAL_TOKEN}
 @pytest.fixture(autouse=True)
 def clean_db():
     DB.init_schema()
-    with DB.tx() as c:
-        for t in ("generation_tasks", "shots", "episodes", "checkpoints", "assets",
-                  "usage_events", "characters", "projects", "model_configs"):
-            c.execute(f"DELETE FROM {t}")
+    truncate_all(DB)
 def _events(text: str) -> list[tuple[str, dict]]:
     out = []
     for block in text.split("\n\n"):

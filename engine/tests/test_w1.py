@@ -10,6 +10,7 @@ import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
 from engine.app.main import app, DB, LOCAL_TOKEN, REGISTRY
+from engine.tests.conftest import truncate_all
 from engine.app.adapters.mock_provider import MockProvider
 from engine.app.storage.db import Database
 from engine.app.storage.util import ulid
@@ -18,11 +19,7 @@ HEADERS = {"X-Local-Token": LOCAL_TOKEN}
 @pytest.fixture(autouse=True)
 def clean_db():
     DB.init_schema()
-    with DB.tx() as c:
-        for t in ("generation_tasks", "shots", "episodes", "checkpoints", "assets",
-                  "usage_events", "characters", "projects", "model_configs"):
-            c.execute(f"DELETE FROM {t}")
-        c.execute("UPDATE credit_wallet SET balance=86.4, frozen=0 WHERE id=1")
+    truncate_all(DB)
     # 注册表隔离：生产路径零 Provider；需要生成能力的测试显式注册 MockProvider
     REGISTRY.clear()
 def register_mock():

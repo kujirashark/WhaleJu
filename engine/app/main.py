@@ -665,6 +665,8 @@ async def export_project(pid: str, req: ExportReq, request: Request = None):
     out = dict(result)
     out["local_path"] = rel_path
     out["download_url"] = f"/api/works/{result['work_id']}/download?token={LOCAL_TOKEN}"
+    # 预览地址：导完就能在页面里直接看，不用先下载
+    out["preview_url"] = f"/api/works/{result['work_id']}/preview?token={LOCAL_TOKEN}"
     out["format"] = result.get("format") or ("frames" if result.get("needs_ffmpeg") else "mp4")
     return out
 @app.get("/api/calls", dependencies=[Depends(auth)])
@@ -733,6 +735,52 @@ def download_work(work_id: str, token: str | None = None):
                         zf.write(f, f.name)
         return FileResponse(zip_path, media_type="application/zip", filename=f"{path.name}.zip")
     return FileResponse(path, media_type="video/mp4", filename=path.name)
+@app.get("/api/works/{work_id}/preview")
+def preview_work(work_id: str, token: str | None = None, request: Request = None):
+    """成片在线预览：<video> 直接播，不用先下载到本地。
+    必须支持 Range 请求，否则浏览器只能从头播、拖不动进度条。
+    """
+    if token != LOCAL_TOKEN:
+        raise HTTPException(401, "令牌无效")
+    work = DB.get("assets", work_id)
+    if not work or work["kind"] != "work":
+        raise HTTPException(404, "作品不存在")
+    path = ASSETS.resolve(work.get("local_path") or "")
+    if not path.exists() or path.is_dir():
+        raise HTTPException(404, "成片文件不存在，请重新导出")
+    media_type = "video/mp4" if path.suffix.lower() == ".mp4" else "application/octet-stream"
+    size = path.stat().st_size
+    rng = request.headers.get("range") if request else None
+    if rng and rng.startswith("bytes="):
+        spec = rng[6:].split(",")[0]
+        head, _, tail = spec.partition("-")
+        try:
+            start = int(head) if head else 0
+            end = int(tail) if tail else size - 1
+        except ValueError:
+            start, end = 0, size - 1
+        start = max(0, min(start, size - 1))
+        end = max(start, min(end, size - 1))
+        length = end - start + 1
+        def iter_range():
+            with path.open("rb") as f:
+                f.seek(start)
+                left = length
+                while left > 0:
+                    chunk = f.read(min(262144, left))
+                    if not chunk:
+                        break
+                    left -= len(chunk)
+                    yield chunk
+        return StreamingResponse(
+            iter_range(), status_code=206, media_type=media_type,
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(length),
+            },
+        )
+    return FileResponse(path, media_type=media_type, headers={"Accept-Ranges": "bytes"})
 @app.get("/api/works/{work_id}/caption", dependencies=[Depends(auth)])
 def work_caption(work_id: str, body: str = ""):
     work = DB.get("assets", work_id)
@@ -958,6 +1006,49 @@ async def generation_progress(pid: str):
     # 全部镜头完成 → RUNNING → CP3_PENDING（等你看成片确认）
     if r.get("total") and r.get("done", 0) >= r.get("total", 0) and not r.get("paused"):
         advance_status(pid, "all_done")
+    # 给每个镜头带上本机素材地址：界面要能直接显示画面/视频，不能只有一句"可用"
+    items = r.get("items") or []
+    legacy: list[dict] = []
+    if any(not it.get("asset_id") for it in items):
+        # 老数据没写 assets.shot_id：按生成顺序兜底匹配一次，别让历史项目全是空缩略图
+        legacy = DB.list(
+            "SELECT id FROM assets WHERE project_id=? AND kind IN ('shot','video') ORDER BY created_at",
+            (pid,),
+        )
+    for idx, it in enumerate(items):
+        aid = it.get("asset_id")
+        if not aid and idx < len(legacy):
+            aid = legacy[idx]["id"]
+            it["asset_id"] = aid
+        it["media_url"] = _asset_file_url(aid)
+    return r
+def _asset_file_url(asset_id: str | None) -> str | None:
+    """本机素材的可访问地址（永久有效，不会像厂商链接那样过期）。"""
+    if not asset_id:
+        return None
+    return f"/api/assets/{asset_id}/file?token={LOCAL_TOKEN}"
+class ShotRegenReq(BaseModel):
+    ability: str | None = Field(default=None, pattern="^(image|video)$")
+@app.post("/api/projects/{pid}/shots/{shot_id}/regenerate", dependencies=[Depends(auth)])
+async def regenerate_shot(pid: str, shot_id: str, req: ShotRegenReq = ShotRegenReq()):
+    """只重新生成这一个镜头。
+    用户要的是"这张不满意，换一张"，不是整批 12 张重跑一遍（重跑一遍又烧一轮额度）。
+    """
+    p = DB.get("projects", pid)
+    if not p:
+        raise HTTPException(404, "项目不存在")
+    try:
+        r = await GENERATIONS.regenerate_shot(pid, shot_id, req.ability)
+    except RuntimeError as exc:
+        raise HTTPException(400, {"code": "E4006", "message": str(exc),
+                                  "hint": "先在聊天框说「生成画面」，跑完一轮后再单独重生成某一个镜头"})
+    if not r.get("ok"):
+        raise HTTPException(400, {
+            "code": "E4007",
+            "message": f"镜头 {shot_id} 重新生成失败：{r.get('fail_reason') or '未知原因'}",
+            "hint": "这次失败不计费，可以再试一次",
+        })
+    r["media_url"] = _asset_file_url(r.get("asset_id"))
     return r
 @app.post("/api/generation/submit", dependencies=[Depends(auth)])
 async def generation_submit(req: GenReq):

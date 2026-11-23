@@ -323,6 +323,8 @@ export const useProjectStore = defineStore('project', () => {
   const expResult = ref<{
     work_id?: string; format?: string; size_bytes?: number; frames?: number
     needs_ffmpeg?: boolean; reason?: string; download_url?: string; ratio?: string
+    /** 成片在线预览地址（导完直接看，不用先下载） */
+    preview_url?: string
   } | null>(null)
   async function exportWork(): Promise<any | null> {
     if (!currentId.value) return null

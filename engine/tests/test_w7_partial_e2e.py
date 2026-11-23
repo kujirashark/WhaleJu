@@ -15,15 +15,13 @@ from fastapi.testclient import TestClient
 import pytest
 from engine.app.main import app, DB, LOCAL_TOKEN, REGISTRY
 from engine.app.adapters.base import ProviderMeta
+from engine.tests.conftest import truncate_all
 HEADERS = {"X-Local-Token": LOCAL_TOKEN}
 @pytest.fixture(autouse=True)
 def clean_db():
     """与 test_w1 一致：每例前重建 schema 并清空数据（临时目录，不碰用户库）。"""
     DB.init_schema()
-    with DB.tx() as c:
-        for t in ("generation_tasks", "shots", "episodes", "checkpoints", "assets",
-                  "usage_events", "characters", "projects", "model_configs"):
-            c.execute(f"DELETE FROM {t}")
+    truncate_all(DB)
     REGISTRY.clear()
 TRUNCATED = (
     '{"title":"被截断的剧","episodes":['

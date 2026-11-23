@@ -296,6 +296,9 @@ img{display:block}
 @media (prefers-reduced-motion:reduce){.caret,.busy-dot{animation:none}}
 /* ── 真实数据占位 ─────────────────────────────────────────── */
 .row-ph{width:34px;height:34px;flex-shrink:0;border-radius:6px;background:var(--panel2);display:grid;place-items:center;font-size:12px;color:var(--ink3);font-family:var(--mono)}
+/* 右侧镜头缩略图：竖屏比例，真实画面一眼可见 */
+.row-thumb{width:34px;height:56px;flex-shrink:0;border-radius:5px;object-fit:cover;background:var(--panel2);display:block}
+.row-thumb.video-thumb{display:grid;place-items:center;color:var(--accent);font-size:13px;background:var(--panel2)}
 .empty-mini{padding:14px 10px;font-size:11px;color:var(--ink3);line-height:1.6;text-align:center}
 .proj-ph{width:96px;height:64px;flex-shrink:0;border-radius:8px;background:var(--panel2);display:grid;place-items:center;font-size:22px;color:var(--ink3);font-weight:600}
 .proj-del{flex-shrink:0;font-size:10.5px;color:var(--ink3);font-family:var(--mono);padding:5px 8px;border-radius:6px;cursor:pointer;opacity:.6;transition:opacity .2s,color .2s}
@@ -316,6 +319,8 @@ img{display:block}
 .role-ph{width:100%;height:100%;display:grid;place-items:center;font-size:11px;color:var(--ink3);background:var(--panel2)}
 /* ── 导出产物卡片（真实结果，不是进度假动画）───────────────── */
 .exp-card{margin-top:14px;padding:12px 14px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+/* 成片预览：导完直接看，不用先下载 */
+.work-preview{display:block;width:100%;max-height:420px;border-radius:8px;background:#04121c;margin-bottom:12px}
 .exp-hd{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--ink);margin-bottom:9px}
 .exp-hd .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .exp-hd .dot.ok{background:var(--ok,#2fe08a);box-shadow:0 0 8px var(--ok,#2fe08a)}
@@ -325,6 +330,21 @@ img{display:block}
 .exp-row span:last-child{text-align:right}
 .exp-warn{margin-top:9px;padding:8px 10px;background:rgba(255,181,71,.08);border-radius:6px;font-size:11px;color:var(--warn,#ffb547);line-height:1.6}
 .wtag{display:inline-block;font-size:10.5px;color:var(--warn,#ffb547);background:rgba(255,181,71,.1);border-radius:6px;padding:3px 8px;font-family:var(--mono)}
+/* ── 第6步镜头卡片：每个镜头看得见真实画面，能单独重生成 ─────── */
+.shot-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:14px}
+.shot-card{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;display:flex;flex-direction:column}
+.shot-card.failed{border-color:rgba(255,107,107,.45)}
+.shot-thumb{position:relative;aspect-ratio:9/16;background:var(--panel2);display:flex;align-items:center;justify-content:center;overflow:hidden}
+.shot-thumb img,.shot-thumb video{width:100%;height:100%;object-fit:cover;display:block;cursor:pointer}
+.shot-ph{font-family:var(--mono);font-size:15px;color:var(--ink3);display:flex;align-items:center;justify-content:center;width:100%;height:100%}
+.shot-no{position:absolute;left:6px;top:6px;font-size:10px;font-family:var(--mono);color:var(--ink);background:rgba(4,18,28,.72);padding:2px 6px;border-radius:4px}
+.shot-badge{position:absolute;right:6px;top:6px;font-size:10px;font-family:var(--mono);padding:2px 6px;border-radius:4px;background:rgba(4,18,28,.72)}
+.shot-badge.c-run{color:var(--accent)}
+.shot-badge.c-fail{color:#ff6b6b}
+.shot-meta{padding:8px 9px 4px;flex:1;min-width:0}
+.shot-meta .t{font-size:11.5px;color:var(--ink);line-height:1.45;word-break:break-word}
+.shot-meta .s{font-size:10.5px;color:var(--ink3);margin-top:3px;line-height:1.4}
+.shot-regen{margin:6px 9px 9px;justify-content:center}
 /* ── 第1步实时生成：一集一集长出来 ─────────────────────────── */
 .gen-ep-progress{display:flex;gap:4px;align-items:center;flex-shrink:0;padding-top:2px}
 .gen-ep-progress .pip{width:7px;height:7px;border-radius:50%;background:var(--panel2);border:1px solid var(--line2)}

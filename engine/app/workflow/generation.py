@@ -27,6 +27,7 @@ class ShotProgress:
     auto_retry_left: int = 2
     cost: float = 0.0
     asset_ref: str | None = None    # 真实生成素材引用（厂商 URL / 本地路径）
+    asset_id: str | None = None     # 本机素材 id：界面拿它读缩略图/视频，永久有效
     ability: str = "image"          # 这一镜用哪种能力生成（image=画面 / video=视频）
 @dataclass
 class Batch:
@@ -76,7 +77,8 @@ class Batch:
             "items": [
                 {"shot_id": i.shot_id, "scene_desc": i.scene_desc,
                  "status": i.status, "cost": i.cost,
-                 "asset_ref": i.asset_ref, "fail_reason": i.fail_reason}
+                 "asset_ref": i.asset_ref, "asset_id": i.asset_id,
+                 "ability": i.ability, "fail_reason": i.fail_reason}
                 for i in self.items
             ],
         }
@@ -124,10 +126,94 @@ class GenerationManager:
             ShotProgress(shot_id=f"s{i + 1}", scene_desc=scenes[i], ability=ability)
             for i in range(shot_count)
         ]
+        self._sync_shot_rows(project_id, batch.items)
         self.batches[batch.id] = batch
         self.by_project[project_id] = batch.id
         batch.task = asyncio.create_task(self._run(batch), name=f"batch-{batch.id}")
         return batch
+    def _sync_shot_rows(self, project_id: str, items: list[ShotProgress]) -> None:
+        """把这一批镜头写进 shots 表。
+        为什么要写：assets.shot_id 有外键指向 shots(id)，不写就存不下
+        "这张画面属于哪个镜头"，而"只重生成这一个镜头"必须靠这个关联。
+        """
+        try:
+            eps = self.db.list(
+                "SELECT id FROM episodes WHERE project_id=? ORDER BY idx LIMIT 1", (project_id,)
+            )
+            if not eps:
+                return
+            ep_id = eps[0]["id"]
+            for it in items:
+                self.db.execute(
+                    """INSERT INTO shots(id,episode_id,idx,scene_desc,prompt,importance,ability,source,status)
+                       VALUES(?,?,?,?,?,?,?,?,?)
+                       ON CONFLICT(id) DO UPDATE SET scene_desc=excluded.scene_desc,
+                                                   ability=excluded.ability""",
+                    (it.shot_id, ep_id, int(it.shot_id[1:]) if it.shot_id[1:].isdigit() else 0,
+                     it.scene_desc, it.scene_desc, "key", it.ability, "owned", "planned"),
+                )
+        except Exception:  # noqa: BLE001 - shots 表写不进去不该阻断生成
+            pass
+    async def regenerate_shot(self, project_id: str, shot_id: str,
+                              ability: str | None = None) -> dict[str, Any]:
+        """只重跑这一个镜头（其它镜头不动）。
+        用户要的是"这一张不满意，重新出一张"，不是整批 12 张重跑一遍。
+        """
+        batch = self.current(project_id)
+        if not batch:
+            raise RuntimeError("这个项目还没有生成批次，先说「生成画面」")
+        idx = next((i for i, it in enumerate(batch.items) if it.shot_id == shot_id), None)
+        if idx is None:
+            raise RuntimeError(f"找不到镜头 {shot_id}")
+        item = batch.items[idx]
+        # 旧画面作废：否则导出时新旧两张都会被拼进去
+        self._drop_shot_assets(project_id, shot_id, idx)
+        item.status = "queued"
+        item.fail_reason = None
+        item.asset_ref = None
+        item.asset_id = None
+        item.cost = 0.0
+        if ability:
+            item.ability = ability
+        ok = await self._run_shot(batch, idx, item)
+        return {
+            "ok": ok,
+            "shot_id": shot_id,
+            "status": item.status,
+            "asset_id": item.asset_id,
+            "fail_reason": item.fail_reason,
+            "cost": item.cost,
+        }
+    def _drop_shot_assets(self, project_id: str, shot_id: str, index: int | None = None) -> None:
+        """删掉这个镜头之前生成的素材（记录 + 本机文件）。
+        老数据没写 assets.shot_id（没有精确关联），就按生成顺序取对应那一张，
+        否则重生成后新旧两张都在，导出会多出一段重复画面。
+        """
+        try:
+            rows = self.db.list(
+                "SELECT id, local_path FROM assets WHERE project_id=? AND shot_id=?", (project_id, shot_id)
+            )
+            if not rows and index is not None:
+                legacy = self.db.list(
+                    "SELECT id, local_path FROM assets WHERE project_id=? "
+                    "AND kind IN ('shot','video') ORDER BY created_at",
+                    (project_id,),
+                )
+                if index < len(legacy):
+                    rows = [legacy[index]]
+        except Exception:  # noqa: BLE001
+            return
+        for r in rows:
+            try:
+                p = self.assets.resolve(r["local_path"]) if self.assets else None
+                if p and p.exists() and p.is_file():
+                    p.unlink()
+            except OSError:
+                pass
+            try:
+                self.db.execute("DELETE FROM assets WHERE id=?", (r["id"],))
+            except Exception:  # noqa: BLE001
+                pass
     def _scenes_from_project(self, project_id: str, shot_count: int) -> list[str]:
         """镜头描述必须来自用户第 5 步确认的真实分镜表。
         过去这里用的是写死的示例场景，导致生成的画面和用户看到的镜头表对不上，
@@ -304,30 +390,34 @@ class GenerationManager:
             item.status = "failed"
             item.fail_reason = reason
             return False
-    def _register_asset(self, project_id: str, item: ShotProgress) -> None:
+    def _register_asset(self, project_id: str, item: ShotProgress) -> str:
         """把生成的画面/视频取回本机并登记 assets 表。
         厂商给的是带签名、会过期的链接；不落地的话项目过一晚全是裂图。
         下载失败不阻塞生成（链接仍可临时查看），但会如实记录。
+        返回本机素材 id：界面靠它读缩略图/视频，永久有效。
         """
         remote = item.asset_ref or ""
         looks_video = remote.lower().split("?")[0].endswith((".mp4", ".mov", ".webm"))
         # kind 区分素材用途：character=定妆图（第 3 步），shot=镜头画面（第 7 步看成片）
         kind = "video" if looks_video else "shot"
-        local_path = ""
         asset_id = ""
         if self.assets is not None and remote:
-            asset = self.assets.save_remote(project_id, kind, remote)
+            # shot_id 一起登记：这样"只重生成这一个镜头"能精确找到旧素材
+            asset = self.assets.save_remote(project_id, kind, remote, shot_id=item.shot_id)
             if asset:
-                local_path = asset["local_path"]
                 asset_id = asset["id"]
-        try:
-            self.db.insert("assets", {
-                "id": asset_id or ulid(), "project_id": project_id,
-                "kind": kind,
-                "local_path": local_path or remote, "sha256": "pending", "size_bytes": 0,
-            })
-        except Exception:  # noqa: BLE001 - 登记失败不影响已完成的生成
-            pass
+        if not asset_id:
+            # 落地失败：登记一条指向原厂链接的行，界面还能临时看
+            try:
+                asset_id = ulid()
+                self.db.insert("assets", {
+                    "id": asset_id, "project_id": project_id, "kind": kind,
+                    "local_path": remote, "sha256": "pending", "size_bytes": 0,
+                })
+            except Exception:  # noqa: BLE001 - 登记失败不影响已完成的生成
+                pass
+        item.asset_id = asset_id or None
+        return asset_id
     async def _run(self, batch: Batch) -> None:
         """逐镜头真实推进。每次重试切换候选 Provider，不用同一家重复撞墙。"""
         try:
