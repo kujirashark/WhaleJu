@@ -39,15 +39,6 @@ async function confirmPay() {
   ui.payOpen = false
   ui.toast(amount ? `额度已到账，本地账本已更新 +${Math.round(amount)}` : '支付未完成，本地引擎未响应')
 }
-async function lockRoles() {
-  ui.lockOpen = false
-  // 第 4 步确认：交给引擎状态机推进（CP2_PENDING → PLANNED），前端只跟进结果
-  const ok = await project.confirmStep(4, { selected: [...project.selectedRoles] })
-  if (!ok) return
-  project.locked = true
-  project.goto(4)
-  ui.toast(`${project.selectedRoles.size} 个形象已确认，去第 5 步拆分镜头`)
-}
 async function openFolder(kind: 'data' | 'works') {
   ui.userMenuOpen = false
   const dir = await engine.openFolder(kind)
@@ -120,16 +111,6 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
       </div>
     </div>
   </div>
-  <!-- CP 检查点弹窗（确认角色形象） -->
-  <div class="ov" :class="{ open: ui.lockOpen }" role="dialog" aria-modal="true">
-    <div class="modal">
-      <div class="modal-h">确认角色形象？</div>
-      <div class="modal-b">确认后，这 <b>5 个年龄</b>的形象会固定下来，用在 <b>12 个镜头</b>里。<br>以后想换，需要把已经做好的镜头重新生成一遍。</div>
-      <div class="modal-f">
-        <button class="btn btn-s" @click="ui.lockOpen = false">再看看</button>
-        <button class="btn btn-p" @click="lockRoles">确认形象，继续</button>
-      </div>
-    </div>
-  </div>
+  <!-- 角色形象确认也走聊天窗口（见 stores/agent.ts 的 confirm_step），不再单独弹窗 -->
   <div class="toast" :class="{ show: !!ui.toastMsg }">{{ ui.toastMsg }}</div>
 </template>

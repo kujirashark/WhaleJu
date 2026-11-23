@@ -187,6 +187,12 @@ export const useProjectStore = defineStore('project', () => {
       if (r.script?.partial) partial.value = true
       shots.value = r.shots || null
       characters.value = r.characters || []
+      // 角色 id 是引擎生成的 chr_xxx，和前端预置的原型 id（child/teen/…）不是一回事。
+      // 不对齐的话：第 3 步会显示"一个都没选"，确认角色时守卫 sel_ge_1 也会失败。
+      const realIds = characters.value.map((c: any) => c.id)
+      if (realIds.length && !realIds.some((id: string) => selectedRoles.value.has(id))) {
+        selectedRoles.value = new Set(realIds)
+      }
       status.value = r.status || 'DRAFT'
       assets.value = r.assets || []
       if (r.script_ver) scriptVer.value = r.script_ver

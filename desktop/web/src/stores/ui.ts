@@ -5,7 +5,6 @@ export const useUiStore = defineStore('ui', () => {
   const theme = ref<'dark' | 'light'>('dark')
   const toastMsg = ref('')
   const payOpen = ref(false)
-  const lockOpen = ref(false)
   const userMenuOpen = ref(false)
   let toastTimer: ReturnType<typeof setTimeout> | undefined
   function applyTheme() {
@@ -26,8 +25,7 @@ export const useUiStore = defineStore('ui', () => {
   }
   function closeAll() {
     payOpen.value = false
-    lockOpen.value = false
     userMenuOpen.value = false
   }
-  return { theme, toastMsg, payOpen, lockOpen, userMenuOpen, applyTheme, toggleTheme, toast, closeAll }
+  return { theme, toastMsg, payOpen, userMenuOpen, applyTheme, toggleTheme, toast, closeAll }
 })

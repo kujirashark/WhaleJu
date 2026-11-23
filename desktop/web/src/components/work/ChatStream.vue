@@ -18,7 +18,7 @@ watch(() => agent.streaming.length, () => {
 })
 async function send() {
   const v = msg.value.trim()
-  if (!v) { ui.toast('先说点什么，比如：第二集太快了'); return }
+  if (!v) { ui.toast('直接说要做什么，比如：写剧本 / 确认剧本 / 拆镜头 / 生成画面'); return }
   msg.value = ''
   await agent.send(v, project.currentId)
 }
@@ -58,7 +58,7 @@ async function confirm() {
       </div>
     </div>
     <div style="display:flex;gap:8px;padding:12px 24px">
-      <input v-model="msg" placeholder="直接说哪里要改，比如：第二集节奏太快了" style="flex:1;border-radius:6px;padding:8px 12px;font-size:12.5px;background:var(--panel);color:var(--ink)" aria-label="给助手的留言" @keyup.enter="send">
+      <input v-model="msg" placeholder="直接说要做什么，比如：写剧本 / 确认剧本 / 拆镜头 / 生成画面 / 导出成片" style="flex:1;border-radius:6px;padding:8px 12px;font-size:12.5px;background:var(--panel);color:var(--ink)" aria-label="给助手的留言" @keyup.enter="send">
       <button class="btn btn-p" :disabled="agent.thinking" @click="send">发送</button>
     </div>
   </div>

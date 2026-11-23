@@ -146,59 +146,8 @@ onMounted(async () => {
   // 刷新页面后恢复进行中的生成批次（进度在引擎里，不会丢）
   if (project.currentId) await gen.restore(project.currentId)
 })
-async function doGenScript() {
-  showOldScript.value = false
-  const version = project.script ? project.scriptVer + 1 : 1
-  const r = await project.genScriptStream(version)
-  if (r.ok) ui.toast('剧本已由你配置的模型生成并保存到本机')
-  else ui.toast(r.error || '生成失败，请检查文本模型配置')
-}
-/**
- * 继续写下一集：一集一集做，省 token 也少被限流截断。
- * 同一稿（version 不变），只是把第 N 集补上。
- */
-async function doGenNextEpisode() {
-  const idx = nextEpisodeIndex.value
-  const r = await project.genScriptStream(project.scriptVer || 1, idx)
-  if (r.ok) ui.toast(`第 ${idx} 集已写好并保存到本机`)
-  else ui.toast(r.error || '生成失败，请检查文本模型配置')
-}
-async function doGenShots() {
-  const r = await project.genShots(12)
-  if (r.ok) ui.toast('镜头表已由你配置的模型生成')
-  else ui.toast(r.error || '拆分失败，请检查文本模型配置')
-}
-function confirmRoles() {
-  project.goto(3)
-  ui.toast('已确认角色，下一步拆分镜头')
-}
-/** 第 2 步确认剧本：先推进引擎状态机（CP1_PENDING → CHARACT），再进下一步。 */
-async function doConfirmOutline() {
-  const ok = await project.confirmStep(2)
-  if (!ok) return
-  project.goto(2)
-  ui.toast('剧本已确认，下一步定角色')
-}
-async function startGen() {
-  const r = await gen.start(project.currentId || '', 12)
-  if (r.ok) { project.goto(5); ui.toast(`已开始真实生成：${gen.routeReason || '按重要性分配'}`) }
-  else ui.toast(r.error || r.hint || '无法开始生成')
-}
-async function doExport() {
-  try {
-    const work = await project.exportWork()
-    if (work) {
-      await project.loadDetail()          // 同步最新状态（导出后项目进入已完成）
-      ui.toast(work.needs_ffmpeg
-        ? `已导出 ${work.frames} 张画面到本机作品库（本机没找到 ffmpeg，装上后点重新导出即可合成 mp4）`
-        : `成片已生成（${prettySize(work.size_bytes)}，AI 标识已写入）`)
-    } else {
-      ui.toast(engine.error || '导出失败：请确认已完成真实生成')
-    }
-  } catch (e: any) {
-    ui.toast(e?.message || engine.error || '导出失败')
-  }
-}
+/* 流程动作全部交给聊天窗口（见 stores/agent.ts）：
+ * 这里只保留"看内容"和"取产物"两类动作，生成/确认/推进一律由 agent 执行。 */
 /** 体积格式化：用户看得懂的 MB / GB。 */
 function prettySize(n?: number | null): string {
   const b = Number(n || 0)
@@ -224,12 +173,6 @@ function downloadWork() {
   ui.toast('开始下载成片')
 }
 /** 第 7 步确认这一版：推进引擎状态（CP3_PENDING → DELIVER），再进导出。 */
-async function doConfirmPreview() {
-  const ok = await project.confirmStep(7)
-  if (!ok) return
-  project.goto(7)
-  ui.toast('这一版已确认，去第 8 步导出')
-}
 </script>
 <template>
   <div class="who">
@@ -292,12 +235,11 @@ async function doConfirmPreview() {
             <div class="state-t">这次没生成成功</div>
             <div class="hint-warn">{{ project.contentError }}</div>
             <div class="acts">
-              <button class="btn btn-p" @click="doGenScript">重新生成</button>
-              <button class="btn btn-s" @click="router.push('/settings')">检查模型配置</button>
               <button v-if="script?.episodes?.length" class="btn btn-s" @click="showOldScript = !showOldScript">
                 {{ showOldScript ? '收起上一稿' : `看看上一稿（第 ${scriptVerText} 稿）` }}
               </button>
             </div>
+            <div class="chat-hint">在下方聊天框说「重新生成这一稿」，我就重写一遍。</div>
             <!-- 上一稿仍然保留，只是这次没写出来 -->
             <div v-if="showOldScript && script?.episodes?.length" class="script old-script">
               <div class="old-tag">上一稿（未改动）</div>
@@ -313,11 +255,8 @@ async function doConfirmPreview() {
               根据这个项目想法，用你配置的文本模型写一部
               <b>{{ targetEpisodes }} 集</b>竖屏短剧<template v-if="targetEpisodes > 1">（一次写一集，省额度也少被限流）</template>。
             </p>
-            <div class="acts">
-              <button class="btn btn-p" @click="doGenScript">用我的模型生成剧本</button>
-              <button class="btn btn-s" @click="router.push('/settings')">配置模型</button>
-            </div>
-            <div class="note">还没配置模型？先去「设置」里添加文本模型并测通，再回来生成。</div>
+            <div class="chat-hint">在下方聊天框说「写剧本」，我就用你配置的文本模型开始写。</div>
+            <div class="note">还没配置模型？在聊天框说「去配置模型」，我带你去设置。</div>
           </template>
           <!-- 已完成 -->
           <template v-else>
@@ -353,15 +292,8 @@ async function doConfirmPreview() {
                 <p>{{ ep.script }}</p>
               </template>
             </div>
-            <div class="acts">
-              <button class="btn btn-p" @click="project.goto(1)">确认这一稿，看大纲</button>
-              <!-- 一集一集写：省 token，少被限流 -->
-              <button v-if="canWriteMore" class="btn btn-p" :disabled="project.contentBusy" @click="doGenNextEpisode">
-                {{ project.contentBusy ? '正在写…' : `继续写第 ${nextEpisodeIndex} 集` }}
-              </button>
-              <button class="btn btn-s" :disabled="project.contentBusy" @click="doGenScript">
-                {{ project.contentBusy ? '正在重写…' : '重新生成这一稿' }}
-              </button>
+            <div class="chat-hint">
+              在下方聊天框说「确认剧本」我就往下走，说「继续写第 {{ nextEpisodeIndex }} 集」我就接着写下一集，说「重新生成这一稿」我就重写。
             </div>
           </template>
           <!-- 模型调用日志：生成结束后依然保留，便于回看这次到底调了什么 -->
@@ -380,10 +312,8 @@ async function doConfirmPreview() {
             </div>
           </div>
           <div v-else class="hint-warn">还没有剧本，请先回到第 1 步生成。</div>
-          <div class="acts">
-            <button v-if="project.status === 'CP1_PENDING'" class="btn btn-p" :disabled="!script?.episodes?.length" @click="doConfirmOutline">确认剧本，开始定角色</button>
-            <button v-else class="btn btn-p" @click="project.goto(2)">剧本已确认，继续定角色</button>
-            <button class="btn btn-s" @click="project.goto(0)">回去改剧本</button>
+          <div class="chat-hint">
+            在下方聊天框说「确认剧本」，我就去定角色；说「回去改剧本」我就回到第 1 步。
           </div>
         </div>
       </template>
@@ -408,9 +338,8 @@ async function doConfirmPreview() {
                 <div class="gen-live-s">图片模型逐张出图，通常需要十几到几十秒 · 已等待 {{ waitedSec }} 秒</div>
               </div>
             </div>
-            <div class="acts">
-              <button class="btn btn-p" @click="confirmRoles">确认这 {{ project.selectedRoles.size }} 个角色</button>
-              <button class="btn btn-s" :disabled="project.contentBusy" @click="project.genCharacters(5).then(r => ui.toast(r.ok ? '定妆图已重新生成' : (r.error || '生成失败')))">全部重新生成</button>
+            <div class="chat-hint">
+              在下方聊天框说「确认角色形象」，我就锁定这些形象往下走；说「重新生成定妆图」我就重出图。
             </div>
             <div class="note">定妆图由你配置的图片模型生成，生成后会自动存到本机，链接过期也不会变裂图。</div>
           </template>
@@ -425,9 +354,8 @@ async function doConfirmPreview() {
                 <div class="gen-live-s">图片模型逐张出图，通常需要十几到几十秒 · 已等待 {{ waitedSec }} 秒</div>
               </div>
             </div>
-            <div class="acts">
-              <button class="btn btn-p" :disabled="project.contentBusy" @click="project.genCharacters(5).then(r => ui.toast(r.ok ? '定妆图已生成' : (r.error || '生成失败')))">{{ project.contentBusy ? '生成中…' : '用我的模型生成定妆图' }}</button>
-              <button class="btn btn-s" @click="router.push('/settings')">去配置图片模型</button>
+            <div class="chat-hint">
+              在下方聊天框说「生成定妆图」，我就用你的图片模型出图；说「去配置图片模型」我带你去设置。
             </div>
             <div class="note">没有配置图片模型时，这里不会显示任何假角色脸。</div>
           </template>
@@ -445,10 +373,8 @@ async function doConfirmPreview() {
             </div>
           </div>
           <div v-if="!project.selectedRoles.size" class="hint-warn">还没有选中的角色，请先回第 3 步生成并选择。</div>
-          <div class="acts">
-            <button v-if="project.status === 'CP2_PENDING'" class="btn btn-p" :disabled="!project.selectedRoles.size" @click="ui.lockOpen = true">确认形象，开始拆镜头</button>
-            <button v-else class="btn btn-p" @click="project.goto(4)">形象已确认，去拆镜头</button>
-            <button class="btn btn-s" @click="project.goto(2)">回去调整形象</button>
+          <div class="chat-hint">
+            在下方聊天框说「确认角色形象」，我就锁定这些形象并往下走；说「重新生成定妆图」我就重出图。
           </div>
           <div class="note w">确认后想换形象，需要把已经做好的镜头重新生成一遍。建议先确认再继续。</div>
         </div>
@@ -468,9 +394,8 @@ async function doConfirmPreview() {
                 </tr>
               </tbody>
             </table>
-            <div class="acts">
-              <button class="btn btn-p" @click="startGen">按这个方案生成</button>
-              <button class="btn btn-s" :disabled="project.contentBusy" @click="doGenShots">重新拆分</button>
+            <div class="chat-hint">
+              在下方聊天框说「生成画面」，我就按这个方案开跑；说「重新拆镜头」我就重拆。
             </div>
             <div class="note">
               预计生成 {{ shots?.shots?.length || 12 }} 张画面，每张 1.5 额度，共约
@@ -498,9 +423,8 @@ async function doConfirmPreview() {
                 <div class="gen-live-s">文本模型正在切分场景，通常需要几秒到十几秒 · 已等待 {{ waitedSec }} 秒</div>
               </div>
             </div>
-            <div class="acts">
-              <button class="btn btn-p" :disabled="project.contentBusy" @click="doGenShots">{{ project.contentBusy ? '拆分中…' : '用我的模型拆分镜头' }}</button>
-              <button class="btn btn-s" @click="project.goto(0)">回去写剧本</button>
+            <div class="chat-hint">
+              在下方聊天框说「拆镜头」，我就用文本模型拆；说「回去写剧本」我就回到第 1 步。
             </div>
             <div class="note">没有镜头表时不会显示任何假镜头。</div>
           </template>
@@ -541,7 +465,7 @@ async function doConfirmPreview() {
             </div>
             <div style="margin-top:8px">剩下的镜头没有执行，也没有扣任何额度。</div>
           </div>
-          <div v-if="gen.notStarted" class="hint-warn">还没有开始生成。请回第 5 步确认镜头后开始；这里只显示引擎的真实进度，没有演示动画。</div>
+            <div v-if="gen.notStarted" class="hint-warn">还没有开始生成。在下方聊天框说「生成画面」我就开跑；这里只显示引擎的真实进度，没有演示动画。</div>
           <div v-if="gen.lastError" class="hint-warn">
             <div><b>生成没跑起来：</b>{{ gen.lastError }}</div>
             <div class="acts" style="margin-top:10px">
@@ -551,16 +475,13 @@ async function doConfirmPreview() {
             <div v-if="gen.lastErrorHint" style="margin-top:8px">{{ gen.lastErrorHint }}</div>
           </div>
           <div class="acts">
-            <template v-if="!gen.total">
-              <button class="btn btn-p" @click="project.goto(4)">回上一步开始生成</button>
-            </template>
-            <template v-else-if="done < gen.total">
+            <template v-if="done < gen.total && gen.total">
               <button class="btn btn-p" @click="gen.paused ? gen.resume(project.currentId || '') : gen.pause(project.currentId || ''); ui.toast(gen.paused ? '已继续生成' : '已暂停，进度已保存')">{{ gen.paused ? '继续生成' : '暂停生成' }}</button>
               <span class="chip c-wait">真实生成中 · 引擎按镜头推进</span>
             </template>
-            <template v-else>
-              <button class="btn btn-p" @click="project.goto(6)">看成片</button>
-            </template>
+          </div>
+          <div class="chat-hint">
+            在下方聊天框说「生成画面」我就开跑，说「确认这一版」我就去导出。
           </div>
           <div class="note">生成在本机引擎里进行，关掉页面不会中断；引擎重启后需要重新生成，已经做好的画面仍然在。</div>
         </div>
@@ -576,16 +497,16 @@ async function doConfirmPreview() {
             </div>
             <div class="acts" style="justify-content:center">
               <button class="btn btn-s" @click="window_open(firstAsset)">在新窗口查看</button>
-              <button class="btn btn-s" @click="project.goto(5)">回第 6 步重做镜头</button>
-              <button v-if="project.status === 'CP3_PENDING'" class="btn btn-p" @click="doConfirmPreview">确认这一版，导出整集</button>
-              <button v-else class="btn btn-p" @click="project.goto(7)">这一版已确认，去导出</button>
+            </div>
+            <div class="chat-hint" style="justify-content:center">
+              在下方聊天框说「确认这一版」，我就去导出成片；说「重新生成画面」我就重跑镜头。
             </div>
             <div class="note">画面来自你配置的图片模型；没有真实素材时不会显示任何示例画面。</div>
           </template>
           <template v-else>
-            <p>还没有真实画面。需要先在第 6 步完成生成，模型返回素材后这里才会显示。</p>
-            <div class="acts" style="justify-content:center">
-              <button class="btn btn-p" @click="project.goto(5)">去生成画面</button>
+            <p>还没有真实画面。需要先完成生成，模型返回素材后这里才会显示。</p>
+            <div class="chat-hint" style="justify-content:center">
+              在下方聊天框说「生成画面」，我就开始跑。
             </div>
             <div class="note">这里不会用示例剧照冒充成片。</div>
           </template>
@@ -629,19 +550,19 @@ async function doConfirmPreview() {
             </div>
             <div v-if="project.expResult.needs_ffmpeg" class="exp-warn">
               本机没找到 ffmpeg，合成 mp4 那一步跳过了 —— 给你的是原始画面 + 合成命令，
-              装好 ffmpeg 后点「重新导出」就能直接出片。
+              装好 ffmpeg 后在聊天框说「重新导出」就能直接出片。
             </div>
           </div>
           <div class="acts">
-            <button v-if="project.exp.state === 'idle'" class="btn btn-p" :disabled="!hasMaterial" @click="doExport">开始导出</button>
             <template v-if="project.exp.state === 'done'">
               <button class="btn btn-p" @click="downloadWork">下载成片</button>
               <button class="btn btn-s" @click="router.push('/works')">去作品库</button>
-              <button class="btn btn-s" @click="doExport">重新导出</button>
               <button class="btn btn-s" @click="engine.openFolder('works'); ui.toast('已打开作品库文件夹')">打开文件夹</button>
             </template>
-            <button v-if="project.exp.state === 'running'" class="btn btn-s" disabled>导出中…</button>
             <span style="font-size:11px;color:var(--ink3);font-family:var(--mono)">只导出本机真实生成的素材</span>
+          </div>
+          <div class="chat-hint">
+            在下方聊天框说「导出成片」，我就合成竖屏 MP4（带 AI 标识）。
           </div>
           <div class="note">已自动把「AI 生成」标识烧进画面。发布前仍需按平台要求勾选 AI 生成选项并完成备案。</div>
         </div>

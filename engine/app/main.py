@@ -483,6 +483,41 @@ async def chat(req: ChatReq):
     """对话（JSON 版）：返回结构意图（intent），不执行写操作。"""
     intent = await AGENT.rewrite(req.message, req.project_id)
     return {"intent": intent.to_dict()}
+# 每个业务状态对应的"确认节点"：状态 → (advance 的 step 号, 这一步叫什么, 下一步是什么)
+_CONFIRM_TARGET = {
+    "CP1_PENDING": (2, "剧本", "定角色"),
+    "CP2_PENDING": (4, "角色形象", "拆镜头"),
+    "CP3_PENDING": (7, "这一版画面", "导出成片"),
+}
+def _confirm_step_reply(project_id: str | None) -> str:
+    """确认类回复：说清楚要确认的是哪一步。"""
+    if not project_id:
+        return "先打开一个项目，我才能确认这一步。"
+    p = DB.get("projects", project_id)
+    if not p:
+        return "这个项目已经不在了，换一个试试。"
+    target = _CONFIRM_TARGET.get(p.get("status") or "")
+    if not target:
+        return "现在没有需要你确认的步骤，直接说要做什么就行。"
+    _step, label, nxt = target
+    return f"好，确认{label}，下一步：{nxt}。"
+def _write_next_episode_reply(project_id: str | None) -> str:
+    """续写类回复：说清楚要写第几集。"""
+    if not project_id:
+        return "先打开一个项目，我才知道要接着写第几集。"
+    p = DB.get("projects", project_id)
+    if not p:
+        return "这个项目已经不在了，换一个试试。"
+    total = int(p.get("episode_count") or 1)
+    written = 0
+    if p.get("script_json"):
+        try:
+            written = len((json.loads(p["script_json"]).get("episodes") or []))
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            written = 0
+    if written >= total:
+        return f"这个项目一共 {total} 集，已经写完了。要改写可以说「重新生成这一稿」。"
+    return f"好，接着写第 {written + 1} 集（共 {total} 集）。"
 @app.post("/api/chat/stream", dependencies=[Depends(auth)])
 async def chat_stream(req: ChatReq):
     """对话（SSE 版，设计 §6.5）：token / intent / done 三事件。
@@ -494,7 +529,12 @@ async def chat_stream(req: ChatReq):
         # 给一句人话回答，并标记 needs_confirm=False，前端就不显示"确认执行"。
         needs_confirm = intent.op != "answer_question"
         if intent.op == "answer_question":
-            reply = "我可以帮你写剧本、定妆图、拆镜头、生成画面或导出成片。直接说想做什么，例如「写三集剧本」。"
+            reply = "我可以帮你写剧本、定妆图、拆镜头、生成画面或导出成片。直接说想做什么，例如「写一集剧本」。"
+        elif intent.op == "confirm_step":
+            # 说清楚确认的是哪一步，别让用户面对一句空泛的"确认执行这一步吗？"
+            reply = _confirm_step_reply(req.project_id)
+        elif intent.op == "write_next_episode":
+            reply = _write_next_episode_reply(req.project_id)
         else:
             reply = intent.confirm or "确认执行这一步吗？"
         for i in range(0, len(reply), 6):
