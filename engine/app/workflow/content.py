@@ -50,12 +50,14 @@ class ContentGenerator:
         )
         return system, f"根据用户想法写一部 3 集竖屏短剧。用户想法：{idea}"
     def _save_script(self, project_id: str, idea: str, version: int, raw: str) -> dict:
-        data = self._parse_json(raw)
+        data, partial = self._parse_json_lenient(raw)
+        episodes = data.get("episodes") or []
         payload = {
             "title": str(data.get("title") or idea[:12]),
-            "episodes": data.get("episodes") or [],
+            "episodes": episodes,
             "version": version,
             "idea": idea,
+            "partial": partial,
             "generated_at": utc_now(),
         }
         with self.db.tx() as c:
@@ -114,9 +116,9 @@ class ContentGenerator:
         idea = (row["idea_text"] if row else "") or "短剧"
         prompt = f"根据这部剧拆分镜头。剧情：{idea}"
         raw = await self._ask(prompt, system)
-        data = self._parse_json(raw)
+        data, partial = self._parse_json_lenient(raw, kind="shots")
         shots = data.get("shots") or []
-        payload = {"shots": shots, "generated_at": utc_now()}
+        payload = {"shots": shots, "partial": partial, "generated_at": utc_now()}
         with self.db.tx() as c:
             c.execute("UPDATE projects SET shots_json=? WHERE id=?",
                       (json.dumps(payload, ensure_ascii=False), project_id))
@@ -208,3 +210,81 @@ class ContentGenerator:
             return json.loads(text)
         except json.JSONDecodeError as exc:
             raise NoProviderError(f"文本模型返回的内容无法解析为剧本：{exc}")
+    # ── 残缺输出的降级提取 ──────────────────────────────────────
+    # 模型偶尔会被截断（厂商关流、max_tokens 触顶、限流中断），
+    # 输出停在半截 JSON 上。此时整份丢弃是可惜的 ——
+    # 已经写完的那几集是好的，应该救回来交给用户。
+    @staticmethod
+    def _unescape(s: str) -> str:
+        """把 JSON 字符串片段反转义（片段可能没闭合，但要能安全处理）。"""
+        try:
+            return json.loads('"' + s + '"')
+        except (json.JSONDecodeError, ValueError):
+            return (s.replace('\\"', '"').replace("\\n", "\n")
+                     .replace("\\t", "\t").replace("\\\\", "\\"))
+    def _extract_episodes(self, raw: str) -> list[dict]:
+        """从残缺 JSON 里逐个抠出 episode 的 idx/title/tags/script。
+        script 的正则允许未闭合（模型正写到一半），
+        这样至少能保住"已完整写完的那几集 + 正在写的那一集的部分正文"。
+        """
+        episodes: list[dict] = []
+        marks = list(re.finditer(r'"idx"\s*:\s*(\d+)', raw))
+        for i, mk in enumerate(marks):
+            seg = raw[mk.start(): marks[i + 1].start() if i + 1 < len(marks) else len(raw)]
+            tm = re.search(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', seg)
+            if not tm:
+                continue
+            sm = re.search(r'"script"\s*:\s*"((?:[^"\\]|\\.)*)', seg)
+            gm = re.search(r'"tags"\s*:\s*\[([^\]]*)\]', seg)
+            tags = []
+            if gm:
+                tags = [self._unescape(t) for t in re.findall(r'"((?:[^"\\]|\\.)*)"', gm.group(1))]
+            episodes.append({
+                "idx": int(mk.group(1)),
+                "title": self._unescape(tm.group(1)),
+                "tags": tags,
+                "script": self._unescape(sm.group(1)) if sm else "",
+            })
+        return episodes
+    def _extract_shots(self, raw: str) -> list[dict]:
+        """从残缺 JSON 里抠出已经写完的镜头。"""
+        shots: list[dict] = []
+        marks = list(re.finditer(r'"idx"\s*:\s*(\d+)', raw))
+        for i, mk in enumerate(marks):
+            seg = raw[mk.start(): marks[i + 1].start() if i + 1 < len(marks) else len(raw)]
+            sm = re.search(r'"scene"\s*:\s*"((?:[^"\\]|\\.)*)', seg)
+            if not sm:
+                continue
+            im = re.search(r'"importance"\s*:\s*"((?:[^"\\]|\\.)*)"', seg)
+            shots.append({
+                "idx": int(mk.group(1)),
+                "scene": self._unescape(sm.group(1)),
+                "importance": self._unescape(im.group(1)) if im else "transition",
+            })
+        return shots
+    def _parse_json_lenient(self, raw: str, kind: str = "script") -> tuple[dict, bool]:
+        """解析模型输出。返回 (数据, 是否残缺)。
+        残缺时不丢弃：至少保住已经写完的部分，让用户拿到部分成果，
+        而不是一句"生成失败"让整轮白跑。
+        """
+        try:
+            return self._parse_json(raw), False
+        except NoProviderError as exc:
+            if kind == "shots":
+                usable = [s for s in self._extract_shots(raw) if (s.get("scene") or "").strip()]
+                if usable:
+                    return {"shots": usable}, True
+            else:
+                episodes = self._extract_episodes(raw)
+                usable = [e for e in episodes if (e.get("script") or "").strip()]
+                if usable:
+                    title_m = re.search(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
+                    title = self._unescape(title_m.group(1)) if title_m else ""
+                    return {"title": title, "episodes": usable}, True
+            # 连一个完整对象都救不回来：把原始输出片段带上，便于定位
+            snippet = raw.strip()[:160].replace("\n", " ")
+            raise NoProviderError(
+                f"文本模型这次没写完（输出在第 {len(raw.strip())} 个字符处中断），没能解析成剧本。"
+                f"已收到的内容开头：{snippet}",
+                code="E4004",
+            ) from exc

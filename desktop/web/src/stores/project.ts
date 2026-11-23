@@ -28,6 +28,8 @@ export const useProjectStore = defineStore('project', () => {
   const streamStage = ref('')
   /** 限流退避状态（来自 SSE wait 事件） */
   const streamWait = ref<{ reason: string; wait_s: number; attempt: number; max_attempts: number } | null>(null)
+  /** 这一稿模型没写完（只写出了部分集） */
+  const partial = ref(false)
   const contentBusy = ref(false)
   const contentError = ref('')
   const streamText = ref('')  // 生成过程实时文本（流式 token 累积）
@@ -54,6 +56,7 @@ export const useProjectStore = defineStore('project', () => {
     streamText.value = ''
     lastStream.value = ''
     streamWait.value = null
+    partial.value = false
     const calls = useCallsStore()
     calls.clearLive()
     try {
@@ -96,12 +99,15 @@ export const useProjectStore = defineStore('project', () => {
             else if (ev === 'call') calls.pushLive(data)   // 实时模型调用日志
             else if (ev === 'meta') {
               // 本次生成的结果汇总，作为日志的最后一条
+              const partialNote = data.partial ? `（模型没写完，只写出了 ${data.episodes || 0} 集）` : ''
               calls.pushLive({
                 ts: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
                 ability: 'text', model: '', endpoint: '', method: 'RESULT', path: '',
                 status: 200, ms: 0, attempt: 1, error: '',
-                note: `生成完成 · ${data.episodes || 0} 集 · ${data.chars || 0} 字`,
+                note: `生成完成 · ${data.episodes || 0} 集 · ${data.chars || 0} 字${partialNote}`,
               })
+              // 残缺：引擎已保住写完的那几集，但这一稿没写全，要如实告诉用户
+              partial.value = !!data.partial
             }
             else if (ev === 'done') {
               script.value = data
@@ -165,6 +171,8 @@ export const useProjectStore = defineStore('project', () => {
     if (r) {
       detail.value = r
       script.value = r.script || null
+      // 残缺标记跟着剧本一起存：刷新页面后仍要告诉用户"这一稿没写完"
+      if (r.script?.partial) partial.value = true
       shots.value = r.shots || null
       characters.value = r.characters || []
       status.value = r.status || 'DRAFT'
@@ -313,7 +321,7 @@ export const useProjectStore = defineStore('project', () => {
   }
   return {
     currentId, step, tab, scriptVer, selectedRoles, locked, ratio, player, exp, expResult, projects,
-    detail, script, shots, characters, contentBusy, contentError, streamText, lastStream, streamStage, streamWait,
+    detail, script, shots, characters, contentBusy, contentError, streamText, lastStream, streamStage, streamWait, partial,
     status, assets, maxStep, assetUrl,
     goto, confirmStep, create, loadProjects, loadDetail, remove, loadTrash, restore,
     genScript, genScriptStream, genShots, genCharacters, toggleRole,

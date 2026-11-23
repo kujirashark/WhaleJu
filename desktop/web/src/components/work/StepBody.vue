@@ -297,6 +297,11 @@ async function doConfirmPreview() {
           </template>
           <!-- 已完成 -->
           <template v-else>
+            <!-- 模型这次没写完：已保住写完的那几集，但必须说清这一稿不全 -->
+            <div v-if="project.partial" class="hint-warn">
+              模型这次写到一半就断了，已保住写完的 {{ script.episodes.length }} 集。
+              点「重新生成」可以再试一次。
+            </div>
             <p>第 {{ scriptVerText }} 稿已写好，共 {{ script.episodes.length }} 集，已保存到本机。</p>
             <!-- 刚生成的过程可回看：用户能确认模型确实写了一篇完整稿 -->
             <details v-if="project.lastStream" class="stream-archive">

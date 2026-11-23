@@ -5,10 +5,14 @@
 engine/run.py 负责在启动前判断并给出结论。
 """
 from __future__ import annotations
+import os
 import socket
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+# 单独运行本文件时也必须隔离真实数据目录
+os.environ.setdefault("MANGJU_DATA_DIR", tempfile.mkdtemp(prefix="mangju-test-w7p-"))
 ROOT = Path(__file__).resolve().parent.parent.parent
 RUN_PY = ROOT / "engine" / "run.py"
 PY = ROOT / ".venv" / "Scripts" / "python.exe"

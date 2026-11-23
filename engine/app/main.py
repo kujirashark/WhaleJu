@@ -312,18 +312,36 @@ async def generate_script_stream(pid: str, req: ScriptGenReq = ScriptGenReq()):
                         "chars": sum(len(ep.get("script") or "") for ep in (value.get("episodes") or [])),
                         "episodes": len(value.get("episodes") or []),
                         "title": value.get("title") or "",
+                        # 模型这次没写完时如实告知：已保住写完的那几集
+                        "partial": bool(value.get("partial")),
                     }
                     # meta 必须早于 done：前端收到 done 即结束读取
                     yield "event: meta\ndata: " + json.dumps(meta, ensure_ascii=False) + "\n\n"
                     yield "event: done\ndata: " + json.dumps(value, ensure_ascii=False) + "\n\n"
         except NoProviderError as exc:
             raw = str(exc)
-            is_quota = "quota" in raw.lower() or "429" in raw or "rate" in raw.lower()
-            err = {
-                "code": exc.code,
-                "message": "厂商额度或频率限制，暂时无法生成" if is_quota else raw,
-                "hint": "等额度恢复或升级套餐；这不是模型配置问题" if is_quota else "到设置里检查文本模型",
-            }
+            low = raw.lower()
+            is_quota = "quota" in low or "429" in raw or "rate" in low
+            is_truncated = exc.code == "E4004" or "没写完" in raw or "无法解析" in raw
+            if is_quota:
+                err = {
+                    "code": exc.code,
+                    "message": "厂商额度或频率限制，暂时无法生成",
+                    "hint": "等额度恢复或升级套餐；这不是模型配置问题",
+                }
+            elif is_truncated:
+                err = {
+                    "code": exc.code or "E4004",
+                    "message": raw,
+                    "hint": "模型这次写到一半就断了 —— 点「重新生成」再试一次；"
+                            "这不是模型配置有问题（连接测试是通过的）",
+                }
+            else:
+                err = {
+                    "code": exc.code,
+                    "message": raw,
+                    "hint": "到设置里检查文本模型",
+                }
             yield "event: error\ndata: " + json.dumps(err, ensure_ascii=False) + "\n\n"
     return StreamingResponse(events(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
