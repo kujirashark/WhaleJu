@@ -12,6 +12,10 @@ const logEl = ref<HTMLElement | null>(null)
 watch(() => agent.messages.length, () => {
   nextTick(() => { if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight })
 })
+// 流式内容增长时同样要跟随，否则长回复的下半截看不到
+watch(() => agent.streaming.length, () => {
+  nextTick(() => { if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight })
+})
 async function send() {
   const v = msg.value.trim()
   if (!v) { ui.toast('先说点什么，比如：第二集太快了'); return }
@@ -42,26 +46,35 @@ async function confirm() {
         <span class="chat-who">{{ m.role === 'user' ? '你' : '助手' }}</span>
         <span class="chat-text">{{ m.text }}</span>
       </div>
+      <!-- 正在回复：流式内容直接排在列表里（和历史消息同一条线） -->
+      <div v-if="agent.streaming" class="chat-msg agent">
+        <span class="chat-who">助手</span>
+        <span class="chat-text">{{ agent.streaming }}<span class="caret">▍</span></span>
+      </div>
+      <!-- 模型还没开口：明确说在等，别让用户以为没发出去 -->
+      <div v-else-if="agent.thinking" class="chat-msg agent">
+        <span class="chat-who">助手</span>
+        <span class="chat-text chat-thinking"><span class="busy-dot"></span>正在思考…</span>
+      </div>
     </div>
-    <!-- SSE 流式回显 -->
-    <div v-if="agent.streaming" class="stream-line">{{ agent.streaming }}<span class="caret">▍</span></div>
     <div style="display:flex;gap:8px;padding:12px 24px">
       <input v-model="msg" placeholder="直接说哪里要改，比如：第二集节奏太快了" style="flex:1;border-radius:6px;padding:8px 12px;font-size:12.5px;background:var(--panel);color:var(--ink)" aria-label="给助手的留言" @keyup.enter="send">
-      <button class="btn btn-p" @click="send">发送</button>
+      <button class="btn btn-p" :disabled="agent.thinking" @click="send">发送</button>
     </div>
   </div>
 </template>
 <style scoped>
-.chat-log{max-height:150px;overflow-y:auto;padding:8px 24px 0;display:flex;flex-direction:column;gap:6px}
+.chat-log{max-height:210px;overflow-y:auto;padding:8px 24px 0;display:flex;flex-direction:column;gap:6px}
 .chat-msg{display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.5}
 .chat-who{flex-shrink:0;color:var(--ink3);font-family:var(--mono);font-size:10px;padding-top:1px}
 .chat-msg.user .chat-who{color:var(--accent)}
-.chat-text{color:var(--ink2);word-break:break-word}
+.chat-text{color:var(--ink2);word-break:break-word;white-space:pre-wrap}
 .chat-msg.user .chat-text{color:var(--ink)}
+.chat-thinking{display:inline-flex;align-items:center;gap:7px;color:var(--ink3)}
+.chat-thinking .busy-dot{margin-top:0}
 .intent-bar{margin:10px 24px 0;padding:10px 12px;background:var(--accent-soft);border-radius:6px;display:flex;align-items:center;justify-content:space-between;gap:12px}
 .ib-txt{font-size:12px;color:var(--ink);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .ib-acts{display:flex;gap:6px;flex-shrink:0}
-.stream-line{margin:8px 24px 0;font-size:12px;color:var(--ink2);font-family:var(--font)}
 .caret{color:var(--accent);animation:blink .8s steps(2) infinite}
 @keyframes blink{50%{opacity:0}}
 </style>

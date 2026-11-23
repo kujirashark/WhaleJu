@@ -302,6 +302,9 @@ async def generate_script_stream(pid: str, req: ScriptGenReq = ScriptGenReq()):
                 elif kind == "call":
                     # 实时调用日志：请求地址、状态码、耗时、重试情况
                     yield "event: call\ndata: " + json.dumps(value, ensure_ascii=False) + "\n\n"
+                elif kind == "wait":
+                    # 限流退避：告诉用户"在等厂商恢复，还有几秒"
+                    yield "event: wait\ndata: " + json.dumps(value, ensure_ascii=False) + "\n\n"
                 else:
                     advance_status(pid, "script_ready")   # 剧本落库后同步推进到「等你确认剧本」
                     # 附上本次调用的量化结果，让用户看到这次到底生成了多少
@@ -650,7 +653,12 @@ def save_model_config(slot: str, req: SaveModelReq):
             )
         else:
             new_verified = 1 if unchanged else 0  # 未变则保留（含原本未验证），变了必须重测
+            # 旧配置物理删除，不只是置 is_active=0：
+            # 只置 0 的话每次保存都往表里堆一行（用户库里已积到 50+ 行），
+            # 而界面上根本看不到它们，纯属垃圾数据。
+            # 顺序要紧：先置 0，再删掉所有非激活行 —— 否则刚被置 0 的那行会留到下次。
             c.execute("UPDATE model_configs SET is_active=0 WHERE slot=?", (slot,))
+            c.execute("DELETE FROM model_configs WHERE slot=? AND is_active=0", (slot,))
             c.execute(
                 """INSERT INTO model_configs
                    (id,slot,source,provider_kind,name,endpoint,model,credential_cipher,abilities,verified,is_active)

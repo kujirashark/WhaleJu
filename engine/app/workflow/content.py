@@ -88,6 +88,10 @@ class ContentGenerator:
                 if isinstance(item, tuple) and item and item[0] == "call":
                     yield ("call", item[1])
                     continue
+                if isinstance(item, tuple) and item and item[0] == "wait":
+                    # 限流退避等待：推给界面，避免黑盒
+                    yield ("wait", item[1])
+                    continue
                 delta = item[1] if (isinstance(item, tuple) and item and item[0] == "delta") else item
                 if not isinstance(delta, str):
                     continue

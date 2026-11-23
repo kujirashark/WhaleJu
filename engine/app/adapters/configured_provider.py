@@ -47,8 +47,9 @@ class ConfiguredProvider:
         return h
     # 限流/临时故障时重试：SenseNova 等免费额度常返回 429 tpm/rpm，
     # 不重试会让用户每次生成都失败，误以为软件跑不通。
+    # 退避要够长：tpm 窗口通常是一分钟，1/2/4 秒必然全部撞墙。
     RETRY_STATUS = {408, 429, 500, 502, 503, 504}
-    RETRY_DELAY_S = (1.0, 2.0, 4.0)  # 三次退避，总计约 7 秒
+    RETRY_DELAY_S = (2.0, 5.0, 12.0, 25.0, 40.0)  # 累计约 84 秒，覆盖一个限流窗口
     def _post(self, path: str, payload: dict) -> tuple[int, dict | None, str]:
         """同步底层 POST（在 async 方法内用 asyncio.to_thread 调用，避免阻塞事件循环）。
         对限流/临时故障做指数退避重试，重试耗尽才如实返回失败。
@@ -126,7 +127,16 @@ class ConfiguredProvider:
                                             note="限流/临时故障，将自动重试" if r.status_code in self.RETRY_STATUS else "")
                             if r.status_code in self.RETRY_STATUS and attempt < len(self.RETRY_DELAY_S):
                                 import asyncio as _aio
-                                await _aio.sleep(self.RETRY_DELAY_S[attempt])
+                                wait_s = self.RETRY_DELAY_S[attempt]
+                                # 把等待状态推给界面：黑盒等待会让人以为卡死
+                                yield ("wait", {
+                                    "attempt": attempt + 1,
+                                    "max_attempts": len(self.RETRY_DELAY_S) + 1,
+                                    "wait_s": wait_s,
+                                    "status": r.status_code,
+                                    "reason": "厂商限流" if r.status_code == 429 else "厂商临时故障",
+                                })
+                                await _aio.sleep(wait_s)
                                 continue
                             raise RuntimeError(f"HTTP {r.status_code}: {body}")
                         # 连接成功：先登记一条"已建立连接"，首字节时间后续再补

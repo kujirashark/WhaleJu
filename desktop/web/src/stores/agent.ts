@@ -20,6 +20,8 @@ export const useAgentStore = defineStore('agent', () => {
   const pendingIntent = ref<Intent | null>(null)
   const streaming = ref('')
   const executing = ref(false)
+  /** 等待模型开口（首字还没来）：这段时间必须有反馈，否则界面像没反应 */
+  const thinking = ref(false)
   function parseSseChunk(block: string): { event: string; data: any } | null {
     const eventLine = block.split('\n').find((l) => l.startsWith('event:'))
     const dataLine = block.split('\n').find((l) => l.startsWith('data:'))
@@ -37,6 +39,7 @@ export const useAgentStore = defineStore('agent', () => {
     messages.value.push({ role: 'user', text })
     streaming.value = ''
     pendingIntent.value = null
+    thinking.value = true
     // SSE 端点需要 token 走 query（EventSource 不能自定义 header）
     const url = `${engine.base}/api/chat/stream?token=${encodeURIComponent(engine.token)}`
     try {
@@ -61,7 +64,10 @@ export const useAgentStore = defineStore('agent', () => {
         for (const block of blocks) {
           const ev = parseSseChunk(block)
           if (!ev) continue
-          if (ev.event === 'token') streaming.value += ev.data.t || ''
+          if (ev.event === 'token') {
+            streaming.value += ev.data.t || ''
+            thinking.value = false      // 开口了
+          }
           else if (ev.event === 'intent') {
             const intent = ev.data as Intent
             // 问答类不产生可执行动作，不弹确认条
@@ -71,9 +77,11 @@ export const useAgentStore = defineStore('agent', () => {
       }
       messages.value.push({ role: 'agent', text: streaming.value || '我记下了。' })
       streaming.value = ''
+      thinking.value = false
       return pendingIntent.value
     } catch {
       // 降级：JSON 版 chat（SSE 不可用时仍能拿到意图；这不是演示，是真接口）
+      thinking.value = false
       const r = await engine.api<{ intent: Intent }>('/api/chat', {
         method: 'POST', body: { message: text, project_id: projectId },
       })
@@ -174,5 +182,5 @@ export const useAgentStore = defineStore('agent', () => {
     messages.value.push({ role: 'agent', text: msg })
     return msg
   }
-  return { messages, pendingIntent, streaming, executing, send, cancel, confirm }
+  return { messages, pendingIntent, streaming, executing, thinking, send, cancel, confirm }
 })

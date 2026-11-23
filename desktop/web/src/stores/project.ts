@@ -22,6 +22,12 @@ export const useProjectStore = defineStore('project', () => {
   const script = ref<any>(null)
   const shots = ref<any>(null)
   const characters = ref<any[]>([])
+  /** 最近一次生成的全过程文本（生成完成后保留，供用户回看） */
+  const lastStream = ref('')
+  /** 生成中的阶段提示（来自 SSE stage 事件） */
+  const streamStage = ref('')
+  /** 限流退避状态（来自 SSE wait 事件） */
+  const streamWait = ref<{ reason: string; wait_s: number; attempt: number; max_attempts: number } | null>(null)
   const contentBusy = ref(false)
   const contentError = ref('')
   const streamText = ref('')  // 生成过程实时文本（流式 token 累积）
@@ -46,6 +52,8 @@ export const useProjectStore = defineStore('project', () => {
     contentBusy.value = true
     contentError.value = ''
     streamText.value = ''
+    lastStream.value = ''
+    streamWait.value = null
     const calls = useCallsStore()
     calls.clearLive()
     try {
@@ -70,8 +78,21 @@ export const useProjectStore = defineStore('project', () => {
           if (!ev || !raw) continue
           try {
             const data = JSON.parse(raw)
-            if (ev === 'stage') { /* 阶段提示由 gen-busy 展示 */ }
-            else if (ev === 'token') streamText.value += data.t || ''
+            if (ev === 'stage') { streamStage.value = data.text || data.stage || '' }
+            else if (ev === 'wait') {
+              // 厂商限流退避：界面必须显示"在等什么、等多久"，否则像卡死
+              streamWait.value = {
+                reason: data.reason || '厂商限流',
+                wait_s: Math.round(data.wait_s || 0),
+                attempt: data.attempt || 1,
+                max_attempts: data.max_attempts || 1,
+              }
+            }
+            else if (ev === 'token') {
+              streamText.value += data.t || ''
+              // 模型开口了：说明重试已经成功，撤掉限流提示
+              if (streamWait.value) streamWait.value = null
+            }
             else if (ev === 'call') calls.pushLive(data)   // 实时模型调用日志
             else if (ev === 'meta') {
               // 本次生成的结果汇总，作为日志的最后一条
@@ -82,14 +103,25 @@ export const useProjectStore = defineStore('project', () => {
                 note: `生成完成 · ${data.episodes || 0} 集 · ${data.chars || 0} 字`,
               })
             }
-            else if (ev === 'done') { script.value = data; streamText.value = ''; return { ok: true } }            else if (ev === 'error') {
+            else if (ev === 'done') {
+              script.value = data
+              // 不清空流式文本：归档成"刚才的生成过程"，
+              // 生成完成后用户还能回看模型是怎么写出来的（原来一闪而过）。
+              lastStream.value = streamText.value
+              streamText.value = ''
+              streamStage.value = ''
+              streamWait.value = null
+              return { ok: true }
+            } else if (ev === 'error') {
               contentError.value = `${data.message || '生成失败'}${data.hint ? ' · ' + data.hint : ''}`
+              streamWait.value = null
             }
           } catch { /* 忽略无法解析的块 */ }
         }
       }
       if (contentError.value) return { ok: false, error: contentError.value }
       if (!script.value) { contentError.value = '生成结束但没有返回剧本'; return { ok: false, error: contentError.value } }
+      lastStream.value = streamText.value
       return { ok: true }
     } catch (e) {
       contentError.value = `生成失败：${(e as Error).message || '本地引擎未响应'}`
@@ -272,7 +304,7 @@ export const useProjectStore = defineStore('project', () => {
   }
   return {
     currentId, step, tab, scriptVer, selectedRoles, locked, ratio, player, exp, expResult, projects,
-    detail, script, shots, characters, contentBusy, contentError, streamText,
+    detail, script, shots, characters, contentBusy, contentError, streamText, lastStream, streamStage, streamWait,
     status, assets, maxStep, assetUrl,
     goto, confirmStep, create, loadProjects, loadDetail, remove, loadTrash, restore,
     genScript, genScriptStream, genShots, genCharacters, toggleRole,

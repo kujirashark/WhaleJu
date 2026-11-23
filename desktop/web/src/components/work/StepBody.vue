@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useGenStore } from '@/stores/gen'
 import { useUiStore } from '@/stores/ui'
 import { useCallsStore } from '@/stores/calls'
 import { engine } from '@/api/engine'
+import { parseStreamEpisodes } from '@/utils/stream'
 import CallLogPanel from './CallLogPanel.vue'
 const router = useRouter()
 const project = useProjectStore()
@@ -33,10 +34,82 @@ function roleImg(r: any): string {
 }
 const scriptState = computed<'empty' | 'busy' | 'error' | 'done'>(() => {
   if (project.contentBusy) return 'busy'
-  if (script.value?.episodes?.length) return 'done'
+  // 失败优先于「已有剧本」：重新生成失败时旧稿还在，
+  // 但界面必须先说失败，否则用户会以为"这次生成成功了"。
   if (project.contentError) return 'error'
+  if (script.value?.episodes?.length) return 'done'
   return 'empty'
 })
+/** 失败时仍可翻看上一稿（用户要能对比，而不是被挡在门外） */
+const showOldScript = ref(false)
+/** 当前稿序号（界面不能写死"第一稿"） */
+const scriptVerText = computed(() => project.scriptVer || 1)
+/* ── 生成过程的实时呈现 ────────────────────────────────────────
+ * 用户要的是"看着它写"：一集一集长出来、当前集高亮、能回看全过程。
+ * 之前是 done 时把流式文本清空换成最终稿，整个过程一闪而过。 */
+/** 流式文本切出的分集 */
+const liveEps = computed(() => parseStreamEpisodes(project.streamText))
+/** 回看区：把归档的生成过程重新切成集 */
+const archiveEps = computed(() => parseStreamEpisodes(project.lastStream))
+/** 回看区的剧名 */
+const archiveTitle = computed(() => {
+  const m = project.lastStream.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"/)
+  return m ? m[1] : ''
+})
+/** 一共要写几集（优先用已有剧本的集数） */
+const totalEpisodes = computed(() => {
+  const n = script.value?.episodes?.length
+  return n && n > 0 ? n : Math.max(liveEps.value.length, 3)
+})
+/** 阶段标题：正在写第几集、叫什么 */
+const liveStageTitle = computed(() => {
+  const cur = liveEps.value[liveEps.value.length - 1]
+  if (cur && cur.title) return `正在写第 ${cur.idx} 集《${cur.title}》`
+  if (cur) return `正在写第 ${cur.idx} 集`
+  if (project.streamStage) return '已连接文本模型，正在等它开口'
+  return '正在写第一稿'
+})
+const liveStageSub = computed(() => {
+  if (!liveEps.value.length) {
+    // 推理模型首字可能要十几秒，必须告诉用户在等什么、等了多久
+    const s = waitedSec.value
+    const base = `已等待 ${s} 秒 · 首次生成通常需要 10-30 秒`
+    return s >= 8 ? `${base}（推理模型要先思考，属正常）` : base
+  }
+  const done = liveEps.value.filter((e) => !e.active).length
+  const total = totalEpisodes.value
+  return done > 0
+    ? `已写完 ${done} 集，共 ${total} 集 · 正在实时输出`
+    : `共 ${total} 集 · 正在实时输出`
+})
+/** 等待首字的秒数：空白等待期必须有交代，否则用户以为卡死 */
+const waitedSec = ref(0)
+let waitTimer: ReturnType<typeof setInterval> | undefined
+watch(
+  () => project.contentBusy,
+  (busy) => {
+    if (busy) {
+      waitedSec.value = 0
+      if (waitTimer) clearInterval(waitTimer)
+      waitTimer = setInterval(() => { waitedSec.value++ }, 1000)
+    } else if (waitTimer) {
+      clearInterval(waitTimer)
+      waitTimer = undefined
+    }
+  },
+  { immediate: true },
+)
+onUnmounted(() => { if (waitTimer) clearInterval(waitTimer) })
+/** 流式容器：内容增长时自动滚到底部 */
+const streamBox = ref<HTMLElement | null>(null)
+watch(
+  () => project.streamText,
+  async () => {
+    await nextTick()
+    const el = streamBox.value
+    if (el) el.scrollTop = el.scrollHeight
+  },
+)
 const scriptPill = computed(() => ({
   done: { text: `第 ${script.value?.version || 1} 稿`, cls: 'p-ok' },
   busy: { text: '生成中', cls: 'p-info' },
@@ -63,6 +136,7 @@ onMounted(async () => {
   if (project.currentId) await gen.restore(project.currentId)
 })
 async function doGenScript() {
+  showOldScript.value = false
   const version = project.script ? project.scriptVer + 1 : 1
   const r = await project.genScriptStream(version)
   if (r.ok) ui.toast('剧本已由你配置的模型生成并保存到本机')
@@ -146,25 +220,70 @@ async function doConfirmPreview() {
       <template v-if="step === 0">
         <div class="card-hd">第 1 步 · 写剧本<span class="pill" :class="scriptPill.cls">{{ scriptPill.text }}</span></div>
         <div class="card-bd">
-          <!-- 生成中：显示阶段 + 实时输出，不给无关操作 -->
+          <!-- 生成中：阶段提示 + 分集实时渲染，不给无关操作 -->
           <template v-if="scriptState === 'busy'">
-            <div class="gen-live">
+            <!-- 厂商限流退避：把等待讲明白，否则用户以为卡死 -->
+            <div v-if="project.streamWait" class="wait-box">
               <span class="busy-dot"></span>
               <div>
-                <div class="gen-live-t">正在写第一稿</div>
-                <div class="gen-live-s">已连接你配置的文本模型，内容会逐字出现在这里。首次生成通常需要十几秒。</div>
+                <div class="gen-live-t">{{ project.streamWait.reason }}，正在自动重试</div>
+                <div class="gen-live-s">
+                  第 {{ project.streamWait.attempt }} / {{ project.streamWait.max_attempts }} 次 ·
+                  {{ project.streamWait.wait_s }} 秒后再试 · 厂商额度恢复后会自动继续
+                </div>
               </div>
             </div>
-            <div v-if="project.streamText" class="stream-text">{{ project.streamText }}<span class="caret">▍</span></div>
-            <div v-else class="stream-placeholder">正在等待模型返回第一个字…</div>
+            <div v-else class="gen-live">
+              <span class="busy-dot"></span>
+              <div style="flex:1;min-width:0">
+                <div class="gen-live-t">{{ liveStageTitle }}</div>
+                <div class="gen-live-s">{{ liveStageSub }}</div>
+              </div>
+              <div v-if="liveEps.length" class="gen-ep-progress">
+                <span v-for="n in totalEpisodes" :key="n" class="pip" :class="{ on: n <= liveEps.length }"></span>
+              </div>
+            </div>
+            <!-- 分集实时渲染：一集一集长出来，当前集高亮 -->
+            <div v-if="liveEps.length" ref="streamBox" class="stream-ep">
+              <div v-for="(ep, i) in liveEps" :key="i" class="s-ep" :class="{ active: ep.active }">
+                <div class="s-ep-hd">
+                  <span class="s-ep-no">第 {{ ep.idx }} 集</span>
+                  <span v-if="ep.title" class="s-ep-title">{{ ep.title }}</span>
+                  <span v-if="ep.active" class="s-ep-live"><span class="busy-dot"></span>正在写</span>
+                </div>
+                <div v-if="ep.body" class="s-ep-bd">{{ ep.body }}</div>
+                <div v-else-if="ep.active" class="s-ep-skel">
+                  <i></i><i></i><i></i>
+                </div>
+              </div>
+              <span class="caret">▍</span>
+            </div>
+            <!-- 首字未到：骨架屏占位，避免整块内容突然跳出来 -->
+            <div v-else ref="streamBox" class="stream-ep">
+              <div v-for="n in totalEpisodes" :key="n" class="s-ep">
+                <div class="s-ep-hd"><span class="s-ep-no s-ep-no skel"></span></div>
+                <div class="s-ep-skel"><i></i><i></i><i></i></div>
+              </div>
+            </div>
           </template>
           <!-- 生成失败：说清原因 + 给出路 -->
           <template v-else-if="scriptState === 'error'">
-            <div class="state-t">没生成成功</div>
+            <div class="state-t">这次没生成成功</div>
             <div class="hint-warn">{{ project.contentError }}</div>
             <div class="acts">
               <button class="btn btn-p" @click="doGenScript">重新生成</button>
               <button class="btn btn-s" @click="router.push('/settings')">检查模型配置</button>
+              <button v-if="script?.episodes?.length" class="btn btn-s" @click="showOldScript = !showOldScript">
+                {{ showOldScript ? '收起上一稿' : `看看上一稿（第 ${scriptVerText} 稿）` }}
+              </button>
+            </div>
+            <!-- 上一稿仍然保留，只是这次没写出来 -->
+            <div v-if="showOldScript && script?.episodes?.length" class="script old-script">
+              <div class="old-tag">上一稿（未改动）</div>
+              <template v-for="(ep, i) in script.episodes" :key="i">
+                <p><b>第 {{ ep.idx || i + 1 }} 集 · {{ ep.title }}</b></p>
+                <p>{{ ep.script }}</p>
+              </template>
             </div>
           </template>
           <!-- 空态：一句话说明 + 一个主动作 -->
@@ -178,9 +297,21 @@ async function doConfirmPreview() {
           </template>
           <!-- 已完成 -->
           <template v-else>
-            <!-- 重新生成失败时旧剧本仍在，必须让用户看到失败原因 -->
-            <div v-if="project.contentError" class="hint-warn">{{ project.contentError }}</div>
-            <p>第一稿已写好，共 {{ script.episodes.length }} 集，已保存到本机。</p>
+            <p>第 {{ scriptVerText }} 稿已写好，共 {{ script.episodes.length }} 集，已保存到本机。</p>
+            <!-- 刚生成的过程可回看：用户能确认模型确实写了一篇完整稿 -->
+            <details v-if="project.lastStream" class="stream-archive">
+              <summary>看看模型刚才是怎么写出来的</summary>
+              <div class="stream-ep archive">
+                <div v-if="archiveTitle" class="s-ep-hd"><span class="s-ep-no">剧名</span><span class="s-ep-title">{{ archiveTitle }}</span></div>
+                <div v-for="(ep, i) in archiveEps" :key="i" class="s-ep">
+                  <div class="s-ep-hd">
+                    <span class="s-ep-no">第 {{ ep.idx }} 集</span>
+                    <span v-if="ep.title" class="s-ep-title">{{ ep.title }}</span>
+                  </div>
+                  <div v-if="ep.body" class="s-ep-bd">{{ ep.body }}</div>
+                </div>
+              </div>
+            </details>
             <div class="script" style="margin-top:14px">
               <template v-for="(ep, i) in script.episodes" :key="i">
                 <p><b>第 {{ ep.idx || i + 1 }} 集 · {{ ep.title }}</b></p>
@@ -231,6 +362,13 @@ async function doConfirmPreview() {
                 <span class="lab">{{ r.name }}</span>
               </div>
             </div>
+            <div v-if="project.contentBusy" class="gen-live" style="margin-top:12px">
+              <span class="busy-dot"></span>
+              <div>
+                <div class="gen-live-t">正在重新生成 5 张角色定妆图</div>
+                <div class="gen-live-s">图片模型逐张出图，通常需要十几到几十秒 · 已等待 {{ waitedSec }} 秒</div>
+              </div>
+            </div>
             <div class="acts">
               <button class="btn btn-p" @click="confirmRoles">确认这 {{ project.selectedRoles.size }} 个角色</button>
               <button class="btn btn-s" :disabled="project.contentBusy" @click="project.genCharacters(5).then(r => ui.toast(r.ok ? '定妆图已重新生成' : (r.error || '生成失败')))">全部重新生成</button>
@@ -240,6 +378,14 @@ async function doConfirmPreview() {
           <template v-else>
             <p>还没有定妆图。用你在设置里配置的图片模型生成角色形象。</p>
             <div v-if="project.contentError" class="hint-warn">{{ project.contentError }}</div>
+            <!-- 生成中：说明在做什么、等多久，避免"点了没反应" -->
+            <div v-if="project.contentBusy" class="gen-live" style="margin-top:12px">
+              <span class="busy-dot"></span>
+              <div>
+                <div class="gen-live-t">正在生成 5 张角色定妆图</div>
+                <div class="gen-live-s">图片模型逐张出图，通常需要十几到几十秒 · 已等待 {{ waitedSec }} 秒</div>
+              </div>
+            </div>
             <div class="acts">
               <button class="btn btn-p" :disabled="project.contentBusy" @click="project.genCharacters(5).then(r => ui.toast(r.ok ? '定妆图已生成' : (r.error || '生成失败')))">{{ project.contentBusy ? '生成中…' : '用我的模型生成定妆图' }}</button>
               <button class="btn btn-s" @click="router.push('/settings')">去配置图片模型</button>
@@ -305,6 +451,14 @@ async function doConfirmPreview() {
           <template v-else>
             <p>还没有镜头表。先由文本模型根据剧本拆分镜头。</p>
             <div v-if="project.contentError" class="hint-warn">{{ project.contentError }}</div>
+            <!-- 拆分中：说明在做什么、等多久 -->
+            <div v-if="project.contentBusy" class="gen-live" style="margin-top:12px">
+              <span class="busy-dot"></span>
+              <div>
+                <div class="gen-live-t">正在按剧情拆分 12 个镜头</div>
+                <div class="gen-live-s">文本模型正在切分场景，通常需要几秒到十几秒 · 已等待 {{ waitedSec }} 秒</div>
+              </div>
+            </div>
             <div class="acts">
               <button class="btn btn-p" :disabled="project.contentBusy" @click="doGenShots">{{ project.contentBusy ? '拆分中…' : '用我的模型拆分镜头' }}</button>
               <button class="btn btn-s" @click="project.goto(0)">回去写剧本</button>
