@@ -68,6 +68,16 @@ def test_api_auth_and_project_flow():
     # DRAFT → script_ready 需通过 step=1（approve 事件；script_ready 由业务内部触发，此处验证状态机已测）
     r = client.get(f"/api/projects/{pid}", headers=HEADERS)
     assert r.json()["status"] == "DRAFT"
+def test_create_project_accepts_short_chinese_idea():
+    """回归：短中文标题（"小鲸流浪记"只有 5 个字）曾被 min_length=10 直接 422。
+    现在只要求至少 2 个字，避免正常输入被挡在门外。
+    """
+    client = TestClient(app)
+    r = client.post("/api/projects", json={"idea": "小鲸流浪记"}, headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert r.json()["id"]
+    # 1 个字仍然是明确的拒绝（422），不是静默通过
+    assert client.post("/api/projects", json={"idea": "鲸"}, headers=HEADERS).status_code == 422
 def test_wallet_recharge():
     client = TestClient(app)
     before = client.get("/api/wallet", headers=HEADERS).json()["balance"]

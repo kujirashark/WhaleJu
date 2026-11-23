@@ -10,6 +10,50 @@ export interface EngineInfo {
   base_url: string
   error?: string | null
 }
+/** 后端字段名 → 中文提示用词 */
+const FIELD_LABELS: Record<string, string> = {
+  idea: '想法',
+  template_id: '题材模板',
+  prompt: '提示词',
+  name: '名称',
+  endpoint: '服务地址',
+  model: '模型',
+  message: '留言',
+  shot_count: '镜头数',
+  count: '数量',
+  duration_s: '时长(秒)',
+  version: '版本',
+}
+/**
+ * 把 FastAPI 的 422 校验错误数组翻译成人话。
+ * 例：[{type:'string_too_short',loc:['body','idea'],ctx:{min_length:10}}]
+ *   → "「想法」至少要 10 个字"
+ * 不翻译的话，界面上只会剩一句毫无信息量的 "422 引擎返回错误"。
+ */
+function describeValidationErrors(errors: any[]): string {
+  const parts: string[] = []
+  for (const e of errors) {
+    const loc: string[] = Array.isArray(e?.loc) ? e.loc : []
+    const field = loc.length ? String(loc[loc.length - 1]) : ''
+    const label = FIELD_LABELS[field] || field
+    const type = String(e?.type || '')
+    const ctx = e?.ctx || {}
+    if (type === 'string_too_short') {
+      parts.push(`「${label}」至少要 ${ctx.min_length ?? 1} 个字`)
+    } else if (type === 'string_too_long') {
+      parts.push(`「${label}」最多 ${ctx.max_length ?? '—'} 个字`)
+    } else if (type === 'missing') {
+      parts.push(`缺少必填项「${label}」`)
+    } else if (type.startsWith('string_')) {
+      parts.push(`「${label}」格式不对`)
+    } else if (type.includes('parsing') || type.includes('type')) {
+      parts.push(`「${label}」格式不对`)
+    } else if (e?.msg) {
+      parts.push(String(e.msg))
+    }
+  }
+  return parts.join('；')
+}
 class EngineClient {
   base = ''
   token = ''
@@ -82,16 +126,21 @@ class EngineClient {
         try {
           const j = await res.json()
           const d = j?.detail
-          const obj = typeof d === 'string' ? { message: d } : (d || {})
-          this.lastError = {
-            code: obj.code,
-            message: obj.message,
-            hint: obj.hint,
-            need: typeof obj.need === 'number' ? obj.need : undefined,
-            balance: typeof obj.balance === 'number' ? obj.balance : undefined,
+          if (Array.isArray(d)) {
+            // FastAPI 请求校验错误：detail 是 [{type,loc,msg,ctx}] 数组
+            detail = describeValidationErrors(d)
+          } else {
+            const obj = typeof d === 'string' ? { message: d } : (d || {})
+            this.lastError = {
+              code: obj.code,
+              message: obj.message,
+              hint: obj.hint,
+              need: typeof obj.need === 'number' ? obj.need : undefined,
+              balance: typeof obj.balance === 'number' ? obj.balance : undefined,
+            }
+            detail = obj.message || j?.message || ''
+            if (obj.hint) detail += ` · ${obj.hint}`
           }
-          detail = obj.message || j?.message || ''
-          if (obj.hint) detail += ` · ${obj.hint}`
         } catch { /* 非 JSON 响应保留状态文本 */ }
         throw new Error(detail || `${res.status} 引擎返回错误`)
       }

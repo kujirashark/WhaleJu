@@ -119,7 +119,9 @@ def auth(x_local_token: str | None = Header(default=None), token: str | None = N
     if (x_local_token or token) != LOCAL_TOKEN:
         raise HTTPException(401, "本地引擎鉴权失败")
 class CreateProject(BaseModel):
-    idea: str = Field(min_length=10, max_length=2000)
+    # min_length 不能按"字"卡：中文短标题是常态（"小鲸流浪记"只有 5 个字），
+    # 之前按 10 字符校验会把正常输入直接挡在 422。
+    idea: str = Field(min_length=2, max_length=2000)
     template_id: str = "life_3ep"
 class AdvanceReq(BaseModel):
     action: str = Field(pattern="^(approve|reject|skip)$")

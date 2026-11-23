@@ -20,6 +20,11 @@ async function create() {
     ui.toast('先写一句你的想法，或者点下面的题材模板')
     return
   }
+  // 后端要求至少 2 个字，这里先拦一道，避免白跑一次请求
+  if ([...v].length < 2) {
+    ui.toast('再多写两个字，至少 2 个字')
+    return
+  }
   if (busy.value) return
   busy.value = true
   try {
