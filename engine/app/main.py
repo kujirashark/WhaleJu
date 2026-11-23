@@ -101,7 +101,37 @@ async def lifespan(app: FastAPI):
     if recovered:
         print(f"[recover] {len(recovered)} 个检查点挂起，等待用户确认（不自动推进）")
     _sync_episode_counts()
+    _sync_role_locks()
     yield
+def _sync_role_locks() -> None:
+    """回填老项目的角色锁定状态。
+    characters.locked 这一列以前从来没人写 —— "角色形象是否已确认"
+    只存在前端内存里，刷新就丢。结果同一屏两套说法：
+    中间卡片按项目状态显示"已确认"，右侧列表按前端内存显示"待确认"。
+    这里按项目状态自愈：项目已经走到 PLANNED 之后的（说明用户当时
+    确认过角色形象），就把该项目的角色补上 locked=1。
+    """
+    try:
+        rows = DB.list(
+            "SELECT id, status FROM projects WHERE status IN "
+            "('PLANNED','RUNNING','CP3_PENDING','DELIVER')"
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[roles_lock] 回填失败：{exc}")
+        return
+    fixed = 0
+    for r in rows:
+        try:
+            with DB.tx() as c:
+                cur = c.execute(
+                    "UPDATE characters SET locked=1 WHERE project_id=? AND COALESCE(locked,0)=0",
+                    (r["id"],),
+                )
+            fixed += cur.rowcount or 0
+        except Exception:  # noqa: BLE001 - 回填失败不该阻断启动
+            continue
+    if fixed:
+        print(f"[roles_lock] 回填 {fixed} 个角色的锁定状态")
 def _sync_episode_counts() -> None:
     """校准老项目的目标集数。
     老库里没有 episode_count 这一列（迁移后默认 1），而用户的想法里可能

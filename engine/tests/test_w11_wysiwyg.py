@@ -241,3 +241,32 @@ def test_no_work_means_no_latest_work():
     pid = _make_project()
     detail = client.get(f"/api/projects/{pid}", headers=HEADERS).json()
     assert detail.get("latest_work") is None
+def test_role_lock_backfill_fixes_legacy_projects():
+    """老项目：状态已过 CP2_PENDING（用户确认过）但 locked 从没写过 → 启动时回填。"""
+    from engine.app.main import _sync_role_locks
+    client = TestClient(app)
+    pid = _make_project()
+    DB.insert("characters", {
+        "id": f"chr_{pid}_1", "project_id": pid, "name": "角色 1",
+        "desc_text": "橘猫", "ref_images": json.dumps([]), "locked": 0,
+    })
+    # 项目已走到 DELIVER：说明角色形象当时是确认过的
+    DB.execute("UPDATE projects SET status='DELIVER' WHERE id=?", (pid,))
+    _sync_role_locks()
+    with DB.read() as c:
+        row = c.execute("SELECT locked FROM characters WHERE project_id=?", (pid,)).fetchone()
+    assert int(row["locked"]) == 1, "老项目的角色锁定状态应被回填"
+def test_role_lock_backfill_skips_unconfirmed_projects():
+    """还在 CP2_PENDING（用户没确认）的项目不能被回填成已确认。"""
+    from engine.app.main import _sync_role_locks
+    client = TestClient(app)
+    pid = _make_project()
+    DB.insert("characters", {
+        "id": f"chr_{pid}_1", "project_id": pid, "name": "角色 1",
+        "desc_text": "橘猫", "ref_images": json.dumps([]), "locked": 0,
+    })
+    DB.execute("UPDATE projects SET status='CP2_PENDING' WHERE id=?", (pid,))
+    _sync_role_locks()
+    with DB.read() as c:
+        row = c.execute("SELECT locked FROM characters WHERE project_id=?", (pid,)).fetchone()
+    assert int(row["locked"]) == 0, "还没确认角色的项目不该被标记为已确认"
