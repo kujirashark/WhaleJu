@@ -2,6 +2,7 @@
 import IdeaBox from '@/components/home/IdeaBox.vue'
 import ProjectList from '@/components/home/ProjectList.vue'
 </script>
+
 <template>
   <main class="view on">
     <div class="home">

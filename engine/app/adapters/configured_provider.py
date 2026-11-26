@@ -1,24 +1,32 @@
 """配置驱动的通用 HTTP Provider（真实 API 接入层）。
+
 设计约束（2026-11-20 去演示化）：
 - 生产路径不再注册任何 Mock；所有能力由用户在设置页配置 endpoint + key + model 后真实调用。
 - 每个 Provider 实例由 model_configs 一行配置构造：source / provider_kind / endpoint / credential / model。
 - 四类能力统一走 OpenAI 兼容 HTTP 协议；视频支持异步两段式（submit 返回 task_id，poll 取结果）。
 - 网络失败、非 200、字段缺失一律返回 GenResult(ok=False)，绝不伪造成功结果。
 - 凭证只在内存中使用，调用完不落日志、不写入 GenResult。
+
 厂商适配说明：MiniMax / 可灵 / DeepSeek / Ollama / ComfyUI 只要暴露 OpenAI 兼容接口，
 填对应 endpoint + model 即可；不兼容的厂商新增一个薄适配器即可，业务层零改动。
 """
 from __future__ import annotations
+
 import asyncio
 import time
+
 import httpx
+
 from .base import (
     GenResult, ImageGenRequest, ProbeResult, ProviderMeta,
     SpeechRequest, TextGenRequest, VideoGenRequest,
 )
 from . import call_log
+
+
 class ConfiguredProvider:
     """由设置页配置构造的真实 HTTP Provider。"""
+
     def __init__(
         self,
         provider_id: str,
@@ -40,16 +48,19 @@ class ConfiguredProvider:
         self.timeout = timeout
         self._results: dict[str, GenResult] = {}
         self._assets: dict[str, str] = {}    # task_id -> 远端素材 URL / 本地落地路径
+
     def _headers(self) -> dict[str, str]:
         h = {"Content-Type": "application/json"}
         if self.api_key:
             h["Authorization"] = f"Bearer {self.api_key}"
         return h
+
     # 限流/临时故障时重试：SenseNova 等免费额度常返回 429 tpm/rpm，
     # 不重试会让用户每次生成都失败，误以为软件跑不通。
     # 退避要够长：tpm 窗口通常是一分钟，1/2/4 秒必然全部撞墙。
     RETRY_STATUS = {408, 429, 500, 502, 503, 504}
     RETRY_DELAY_S = (2.0, 5.0, 12.0, 25.0, 40.0)  # 累计约 84 秒，覆盖一个限流窗口
+
     def _post(self, path: str, payload: dict) -> tuple[int, dict | None, str]:
         """同步底层 POST（在 async 方法内用 asyncio.to_thread 调用，避免阻塞事件循环）。
         对限流/临时故障做指数退避重试，重试耗尽才如实返回失败。
@@ -81,9 +92,11 @@ class ConfiguredProvider:
             if attempt < len(self.RETRY_DELAY_S):
                 _time.sleep(self.RETRY_DELAY_S[attempt])
         return last_status, None, last_err
+
     def _ability(self) -> str:
         """该 Provider 的主能力（用于日志归类）。"""
         return self.meta.abilities[0] if self.meta.abilities else "unknown"
+
     async def stream_chat(
         self,
         prompt: str,
@@ -92,9 +105,11 @@ class ConfiguredProvider:
         temperature: float = 0.7,
     ):
         """OpenAI 兼容流式对话。
+
         yield 两种事件：
         - ("delta", 文本增量) —— 模型返回的内容
         - ("call", 调用记录) —— 每一次真实 HTTP 尝试（含重试、失败、耗时）
+
         厂商返回 `data: {"choices":[{"delta":{"content":"..."}}]}` 的 SSE 行，
         以 `data: [DONE]` 结束。任何失败都通过 RuntimeError 抛出，交由上层
         如实反馈，绝不伪造 token。
@@ -111,6 +126,7 @@ class ConfiguredProvider:
         }
         import json as _json
         import time as _time
+
         for attempt in range(len(self.RETRY_DELAY_S) + 1):
             t0 = _time.monotonic()
             got_data = False
@@ -181,8 +197,10 @@ class ConfiguredProvider:
                     await _aio.sleep(self.RETRY_DELAY_S[attempt])
                     continue
                 raise RuntimeError(f"流式连接失败：{str(exc)[:120]}") from exc
+
     async def probe(self) -> ProbeResult:
         """真实探测：GET {endpoint}/models，成功即视为可用。不返回任何 mock 结果。
+
         额外做一件用户真正需要的事：把厂商返回的模型列表带回来，
         便于核对「你填的模型标识」是不是这个厂商真有的模型
         （最常见的错：把图片模型填到生成视频槽位，测试能过、生成必失败）。
@@ -217,10 +235,12 @@ class ConfiguredProvider:
             )
         except Exception as exc:  # noqa: BLE001
             return ProbeResult(ok=False, error=f"连接失败：{str(exc)[:120]}")
+
     async def submit(self, req: object) -> str:
         """提交生成任务。同步能力（text/image/speech）在 submit 内完成（伪异步）；
         视频按厂商能力提交异步任务，返回 provider task_id 供 poll。"""
         task_id = f"cfg_{int(time.time() * 1000)}_{hash(repr(req)) & 0xFFFFFFF:x}"
+
         if isinstance(req, TextGenRequest):
             status, data, err = await asyncio.to_thread(self._post, "/chat/completions", {
                 "model": self.model,
@@ -244,6 +264,7 @@ class ConfiguredProvider:
             except (KeyError, IndexError, TypeError) as exc:
                 self._results[task_id] = GenResult(ok=False, fail_reason=f"bad_response: {exc}")
             return task_id
+
         if isinstance(req, ImageGenRequest):
             status, data, err = await asyncio.to_thread(self._post, "/images/generations", {
                 "model": self.model,
@@ -268,6 +289,7 @@ class ConfiguredProvider:
             except (KeyError, IndexError, TypeError) as exc:
                 self._results[task_id] = GenResult(ok=False, fail_reason=f"bad_response: {exc}")
             return task_id
+
         if isinstance(req, VideoGenRequest):
             status, data, err = await asyncio.to_thread(self._post, "/video/generations", {
                 "model": self.model,
@@ -285,6 +307,7 @@ class ConfiguredProvider:
             self._results[task_id] = GenResult(ok=True, provider_task_id=provider_tid)
             self._assets[task_id] = provider_tid
             return task_id
+
         if isinstance(req, SpeechRequest):
             status, data, err = await asyncio.to_thread(self._post, "/audio/speech", {
                 "model": self.model, "input": req.text, "voice": req.voice_id, "speed": req.speed,
@@ -294,8 +317,10 @@ class ConfiguredProvider:
                 return task_id
             self._results[task_id] = GenResult(ok=True, units_used=1.0)
             return task_id
+
         self._results[task_id] = GenResult(ok=False, fail_reason="unsupported_request")
         return task_id
+
     async def poll(self, task_id: str) -> GenResult:
         """查询结果。视频走真实轮询 GET {endpoint}/video/generations/{id}；
         同步能力直接返回 submit 阶段写好的结果。"""

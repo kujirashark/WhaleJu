@@ -3,6 +3,7 @@
  * 令牌只保存在内存，不写 localStorage，不出现在任何 URL。
  */
 import { invoke } from '@tauri-apps/api/core'
+
 export interface EngineInfo {
   running: boolean
   port: number
@@ -10,6 +11,7 @@ export interface EngineInfo {
   base_url: string
   error?: string | null
 }
+
 /** 后端字段名 → 中文提示用词 */
 const FIELD_LABELS: Record<string, string> = {
   idea: '想法',
@@ -24,6 +26,7 @@ const FIELD_LABELS: Record<string, string> = {
   duration_s: '时长(秒)',
   version: '版本',
 }
+
 /**
  * 把 FastAPI 的 422 校验错误数组翻译成人话。
  * 例：[{type:'string_too_short',loc:['body','idea'],ctx:{min_length:10}}]
@@ -38,6 +41,7 @@ function describeValidationErrors(errors: any[]): string {
     const label = FIELD_LABELS[field] || field
     const type = String(e?.type || '')
     const ctx = e?.ctx || {}
+
     if (type === 'string_too_short') {
       parts.push(`「${label}」至少要 ${ctx.min_length ?? 1} 个字`)
     } else if (type === 'string_too_long') {
@@ -54,6 +58,7 @@ function describeValidationErrors(errors: any[]): string {
   }
   return parts.join('；')
 }
+
 class EngineClient {
   base = ''
   token = ''
@@ -65,9 +70,11 @@ class EngineClient {
   mode: 'booting' | 'tauri' | 'browser' = 'booting'
   /** 连接完成的 Promise，供 UI 等待（避免 ref 追踪不到普通属性变化） */
   ready!: Promise<boolean>
+
   private async isTauri(): Promise<boolean> {
     return typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
   }
+
   async connect(): Promise<boolean> {
     let info: EngineInfo | null = null
     if (await this.isTauri()) {
@@ -93,6 +100,7 @@ class EngineClient {
         this.error = '未检测到本地引擎，请先启动鲸鲨漫剧桌面应用'
       }
     }
+
     if (info?.running && info.base_url && info.token) {
       this.base = info.base_url
       this.token = info.token
@@ -102,11 +110,13 @@ class EngineClient {
     this.online = false
     return false
   }
+
   /** 初始化连接（幂等），返回同一个 Promise */
   init(): Promise<boolean> {
     if (!this.ready) this.ready = this.connect()
     return this.ready
   }
+
   async api<T = any>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T | null> {
     if (!this.online) {
       // 必须记下原因：上层要靠它区分"引擎没连上"和"引擎没响应"，
@@ -155,6 +165,7 @@ class EngineClient {
       return null
     }
   }
+
   async openFolder(kind: 'data' | 'works'): Promise<string | null> {
     if (!(await this.isTauri())) return null
     try {
@@ -165,4 +176,5 @@ class EngineClient {
     }
   }
 }
+
 export const engine = new EngineClient()

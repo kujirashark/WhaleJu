@@ -2,6 +2,7 @@
 -- 11 张表；引擎为唯一写者；WAL 模式；ULID 时间有序
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
+
 CREATE TABLE IF NOT EXISTS projects (
   id          TEXT PRIMARY KEY,      -- 项目唯一标识（ULID，时间有序：列表排序免二次转换）
   name        TEXT NOT NULL,         -- 项目名（LLM 从想法中提取，用户可改）
@@ -16,6 +17,7 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   deleted_at  TEXT                   -- 软删时间戳；NULL=正常。删除进回收站目录，7 天后清理任务物理删除
 );
+
 CREATE TABLE IF NOT EXISTS episodes (
   id         TEXT PRIMARY KEY,       -- 集唯一标识（ULID）
   project_id TEXT NOT NULL REFERENCES projects(id),  -- 所属项目（级联删除）
@@ -25,6 +27,7 @@ CREATE TABLE IF NOT EXISTS episodes (
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   UNIQUE(project_id, idx)            -- 同项目内集号唯一
 );
+
 CREATE TABLE IF NOT EXISTS characters (
   id              TEXT PRIMARY KEY,        -- 角色唯一标识（ULID）
   project_id      TEXT NOT NULL REFERENCES projects(id),  -- 所属项目
@@ -37,6 +40,7 @@ CREATE TABLE IF NOT EXISTS characters (
   updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   CHECK (locked IN (0,1))
 );
+
 CREATE TABLE IF NOT EXISTS shots (
   id          TEXT PRIMARY KEY,      -- 镜头唯一标识（ULID）
   episode_id  TEXT NOT NULL REFERENCES episodes(id),  -- 所属集
@@ -52,6 +56,7 @@ CREATE TABLE IF NOT EXISTS shots (
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
 CREATE TABLE IF NOT EXISTS generation_tasks (
   id               TEXT PRIMARY KEY,      -- 任务唯一标识（ULID）
   shot_id          TEXT NOT NULL REFERENCES shots(id),  -- 目标镜头
@@ -67,6 +72,7 @@ CREATE TABLE IF NOT EXISTS generation_tasks (
   UNIQUE(shot_id, request_hash)           -- 幂等约束
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON generation_tasks(status);
+
 CREATE TABLE IF NOT EXISTS assets (
   id           TEXT PRIMARY KEY,      -- 素材唯一标识（ULID）
   project_id   TEXT NOT NULL REFERENCES projects(id),  -- 所属项目（素材按项目目录隔离）
@@ -79,6 +85,7 @@ CREATE TABLE IF NOT EXISTS assets (
   created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
 CREATE TABLE IF NOT EXISTS checkpoints (
   id             TEXT PRIMARY KEY,      -- 检查点记录唯一标识（ULID）
   project_id     TEXT NOT NULL REFERENCES projects(id),  -- 所属项目
@@ -89,6 +96,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
   created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
 CREATE TABLE IF NOT EXISTS usage_events (
   id                TEXT PRIMARY KEY,  -- 事件唯一标识（ULID）
   ts                TEXT NOT NULL,     -- 事件时间(ISO 8601)；账单按月聚合分组键
@@ -103,6 +111,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
   fail_reason       TEXT               -- 失败原因（冗余自 tasks，便于单表统计）
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_events(ts);
+
 CREATE TABLE IF NOT EXISTS model_configs (
   id                TEXT PRIMARY KEY,  -- 配置唯一标识（ULID）
   slot              TEXT NOT NULL,     -- text/image/video/speech
@@ -119,6 +128,7 @@ CREATE TABLE IF NOT EXISTS model_configs (
   updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_model_active ON model_configs(slot) WHERE is_active=1;
+
 CREATE TABLE IF NOT EXISTS agent_history (
   id          TEXT PRIMARY KEY,  -- 消息唯一标识（ULID）
   project_id  TEXT,              -- 关联项目（可空：全局闲聊）
@@ -128,6 +138,7 @@ CREATE TABLE IF NOT EXISTS agent_history (
   summary_to  TEXT,              -- 压缩标记：指向某消息 id，该 id 之前历史已压缩
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
 -- 触发器：projects 表 updated_at 自动维护（必须在表创建之后）
 CREATE TRIGGER IF NOT EXISTS trg_projects_updated AFTER UPDATE ON projects
 BEGIN

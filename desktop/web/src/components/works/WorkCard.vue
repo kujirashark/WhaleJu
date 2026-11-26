@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { engine } from '@/api/engine'
 import { useUiStore } from '@/stores/ui'
+
 const props = defineProps<{
   img?: string
   title: string
@@ -12,6 +13,7 @@ const props = defineProps<{
   frames?: number
 }>()
 const ui = useUiStore()
+
 /**
  * 下载成片：走引擎的只读下载端点，拿到的就是真文件。
  * 之前这里只是"打开作品库文件夹"，用户点完手里还是没有东西。
@@ -27,9 +29,11 @@ function download() {
   a.remove()
   ui.toast(props.format === 'frames' ? '开始下载画面素材包（zip）' : '开始下载成片')
 }
+
 function openFolder() {
   engine.openFolder('works').then((dir) => ui.toast(dir ? `已打开作品库文件夹：${dir}` : '成片保存在本机作品库文件夹'))
 }
+
 async function copyCap() {
   if (props.workId) {
     const r = await engine.api<{ caption: string }>(`/api/works/${props.workId}/caption`)
@@ -43,10 +47,12 @@ async function copyCap() {
   if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {})
   ui.toast('发布文案已复制，含 AI 生成声明')
 }
+
 function recut() {
   ui.toast('请回到该项目调整后重新生成；这一段不会被单独伪造重做')
 }
 </script>
+
 <template>
   <div class="workcard">
     <div class="wshot">

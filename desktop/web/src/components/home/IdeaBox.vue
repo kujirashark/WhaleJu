@@ -5,15 +5,18 @@ import { TEMPLATES } from '@/constants'
 import { useProjectStore } from '@/stores/project'
 import { useUiStore } from '@/stores/ui'
 import { engine } from '@/api/engine'
+
 const router = useRouter()
 const project = useProjectStore()
 const ui = useUiStore()
 const idea = ref('')
 /** 提交中：防止连点造成重复建项目 */
 const busy = ref(false)
+
 function fill(tpl: string) {
   idea.value = TEMPLATES[tpl] || ''
 }
+
 async function create() {
   const v = idea.value.trim()
   if (!v) {
@@ -49,6 +52,7 @@ async function create() {
 }
 defineExpose({ idea })
 </script>
+
 <template>
   <div class="home-box">
     <textarea v-model="idea" rows="2" placeholder="例如：深夜便利店连续出现同一张脸，悬疑反转（不说集数就按一集做）" aria-label="描述你想做的剧"></textarea>

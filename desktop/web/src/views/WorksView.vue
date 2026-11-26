@@ -4,20 +4,25 @@ import { useRouter } from 'vue-router'
 import WorkCard from '@/components/works/WorkCard.vue'
 import { engine } from '@/api/engine'
 import { useUiStore } from '@/stores/ui'
+
 const router = useRouter()
 const ui = useUiStore()
 const works = ref<any[]>([])
 const loading = ref(true)
+
 onMounted(async () => {
   const r = await engine.api<{ items: any[] }>('/api/works')
   works.value = r?.items || []
   loading.value = false
 })
+
 const size = (n: number) => n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`
+
 function openWorksFolder() {
   engine.openFolder('works').then((d) => ui.toast(d ? `已打开：${d}` : '作品库文件夹未打开'))
 }
 </script>
+
 <template>
   <main class="view on">
     <div class="home">

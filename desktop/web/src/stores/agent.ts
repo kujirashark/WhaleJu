@@ -4,6 +4,7 @@ import { engine } from '@/api/engine'
 import { useProjectStore } from './project'
 import { useUiStore } from './ui'
 import { useGenStore } from './gen'
+
 /** 对话 Agent（设计 §6.5 / §5.3）：SSE 三事件 + 意图确认门。
  *  Never 层：未确认的写操作一律不执行；确认后由前端调对应业务接口。 */
 export interface ChatMessage {
@@ -21,6 +22,7 @@ export interface Intent {
   needs_confirm?: boolean  // 问答类为 false，不弹确认条
   params?: Record<string, any>  // 意图参数（如用户点名的"第几集"）
 }
+
 /** 引擎业务状态 → 需要用户确认的节点（对应引擎 steps/{n}/advance）。
  *  界面上不再放流程按钮，流程全部由对话推进，这里就是唯一的推进依据。 */
 const CONFIRM_FOR_STATUS: Record<string, { step: number; label: string; next: string }> = {
@@ -28,6 +30,7 @@ const CONFIRM_FOR_STATUS: Record<string, { step: number; label: string; next: st
   CP2_PENDING: { step: 4, label: '角色形象', next: '拆镜头' },
   CP3_PENDING: { step: 7, label: '这一版画面', next: '导出成片' },
 }
+
 /** 每个动作执行前，引擎状态必须先到达的位置（按顺序推进） */
 const NEEDED_STATES: Record<string, string[]> = {
   gen_characters: ['CP1_PENDING'],
@@ -36,6 +39,7 @@ const NEEDED_STATES: Record<string, string[]> = {
   gen_video: ['CP1_PENDING', 'CP2_PENDING'],
   export_video: ['CP1_PENDING', 'CP2_PENDING', 'CP3_PENDING'],
 }
+
 /** 动作做完后，界面应该停在第几步（让用户直接看到结果） */
 const STEP_AFTER: Record<string, number> = {
   gen_script: 0,
@@ -48,6 +52,7 @@ const STEP_AFTER: Record<string, number> = {
   gen_video: 5,
   export_video: 7,
 }
+
 export const useAgentStore = defineStore('agent', () => {
   const messages = ref<ChatMessage[]>([])
   const pendingIntent = ref<Intent | null>(null)
@@ -59,6 +64,7 @@ export const useAgentStore = defineStore('agent', () => {
   const processText = ref('')
   /** 生成批次状态：边跑边报进度时要用 */
   const gen = useGenStore()
+
   function parseSseChunk(block: string): { event: string; data: any } | null {
     const eventLine = block.split('\n').find((l) => l.startsWith('event:'))
     const dataLine = block.split('\n').find((l) => l.startsWith('data:'))
@@ -72,14 +78,17 @@ export const useAgentStore = defineStore('agent', () => {
       return null
     }
   }
+
   /** 把助手的这段话正式落成一条消息（避免自动执行时消息重复/丢失） */
   function flushAssistantMessage(fallback = '我记下了。') {
     messages.value.push({ role: 'agent', text: streaming.value || fallback, kind: 'say' })
     streaming.value = ''
   }
+
   /* ── 执行过程 ────────────────────────────────────────────────
    * 用户要看到"它到底在干什么"：每一步做了什么、当前进度多少，
    * 都在聊天窗口里实时播报，而不是只在结束时甩一句"已完成"。 */
+
   /** 开始一段执行过程 */
   function beginStep(text: string) {
     processText.value = text
@@ -111,6 +120,7 @@ export const useAgentStore = defineStore('agent', () => {
   function endStep() {
     processText.value = ''
   }
+
   /**
    * 边跑边报进度：等这一批生成结束（成功或全部失败），
    * 期间不断刷新"已完成 N/M"。用户要看到过程，而不是等半天来一句"已完成"。
@@ -133,6 +143,7 @@ export const useAgentStore = defineStore('agent', () => {
     }
     return false
   }
+
   async function send(text: string, projectId: string | null) {
     if (executing.value) {
       // 上一个动作还没跑完：并发执行会互相踩状态机
@@ -144,6 +155,7 @@ export const useAgentStore = defineStore('agent', () => {
     pendingIntent.value = null
     thinking.value = true
     let replied = false
+
     // SSE 端点需要 token 走 query（EventSource 不能自定义 header）
     const url = `${engine.base}/api/chat/stream?token=${encodeURIComponent(engine.token)}`
     try {
@@ -156,6 +168,7 @@ export const useAgentStore = defineStore('agent', () => {
         body: JSON.stringify({ message: text, project_id: projectId }),
       })
       if (!res.ok || !res.body) throw new Error(`SSE ${res.status}`)
+
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buf = ''
@@ -209,7 +222,9 @@ export const useAgentStore = defineStore('agent', () => {
       return pendingIntent.value
     }
   }
+
   function cancel() { pendingIntent.value = null }
+
   /** 用户确认后由前端调真实业务接口执行；未确认绝不调用。
    *  设计 §5.3：Agent 只产意图，写操作必须映射到业务接口，不能只回一个假 effects。 */
   async function confirm(): Promise<string> {
@@ -247,6 +262,7 @@ export const useAgentStore = defineStore('agent', () => {
         if (s === undefined) return
         project.goto(s)
       }
+
       switch (intent.op) {
         case 'confirm_step': {
           // 界面上没有流程按钮了：用户说"确认""可以了"，就由这里推进状态机
@@ -416,5 +432,6 @@ export const useAgentStore = defineStore('agent', () => {
     messages.value.push({ role: 'agent', text: msg, kind: 'say' })
     return msg
   }
+
   return { messages, pendingIntent, streaming, executing, thinking, processText, send, cancel, confirm }
 })

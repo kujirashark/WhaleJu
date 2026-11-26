@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
+
 const props = defineProps<{
   id: string
   title: string
@@ -10,16 +11,20 @@ const props = defineProps<{
 }>()
 const settings = useSettingsStore()
 const ui = useUiStore()
+
 const choice = computed(() => settings.slots[props.id] || '')
 const draft = computed(() => settings.drafts[props.id])
 const server = computed(() => settings.serverSlots[props.id] || {})
 const verified = computed(() => !!server.value.verified)
+
 async function onTest() {
   const ok = await settings.test(props.id)
   ui.toast(ok ? '连接测试通过，这个能力已可以使用' : '连接测试未通过，请检查地址、模型和密钥')
 }
+
 const isLocal = computed(() => choice.value === 'local')
 const needKey = computed(() => choice.value !== 'local')
+
 async function onSave() {
   const ok = await settings.saveOne(props.id)
   if (!ok) { ui.toast(settings.probeResults[props.id] || '保存失败'); return }
@@ -33,6 +38,7 @@ const keyPlaceholder = computed(() =>
   hasSavedKey.value ? '••••••••  已保存，留空即沿用' : '首次配置请粘贴密钥'
 )
 </script>
+
 <template>
   <div class="grp">
     <div class="grp-h">{{ title }}<span>{{ desc }}</span></div>
@@ -41,8 +47,10 @@ const keyPlaceholder = computed(() =>
       <div><div class="t">{{ o.t }}</div><div class="d">{{ o.d }}</div></div>
       <span class="pr" :class="{ f: o.free }">{{ o.p }}</span>
     </div>
+
     <!-- 未选择来源：明确提示，不默认可用 -->
     <div v-if="!choice" class="hint-warn">还没有为「{{ title }}」选来源。不选就无法使用这个能力，开始前会明确告诉你。</div>
+
     <template v-else>
       <div class="cfgbox">
         <label class="cf">

@@ -2,7 +2,9 @@
 import { computed } from 'vue'
 import { STEPS } from '@/constants'
 import { useProjectStore } from '@/stores/project'
+
 const project = useProjectStore()
+
 /**
  * 步骤描述必须来自真实项目状态。
  * 以前这里是写死的文案（"前 30 秒"、"12 个镜头"），
@@ -27,6 +29,7 @@ const stepDesc = computed<Record<number, string>>(() => {
   }
 })
 </script>
+
 <template>
   <aside class="side" aria-label="制作步骤">
     <div class="side-t">制作步骤 / 08</div>

@@ -1,24 +1,31 @@
 """素材落地存储：厂商临时链接 → 本机文件 + assets 表登记。
+
 为什么必须落地（2026-11-21 修复）：
 - 厂商返回的是带签名、有有效期的临时链接（SenseNova 给的是 24 小时后过期的
   预签名 OSS 链接）。直接把这个链接存进项目，链接一过期，项目里的画面就全部
   变裂图，用户之前生成的成果等于丢了。
 - 界面还有 CSP 限制，外链图片在应用内不一定能显示。
+
 所以：生成到素材后立刻下载到本机 data/assets/<project_id>/，登记 assets 表，
 界面一律读本机文件；下载失败时保留原厂链接兜底，不谎报成功。
 """
 from __future__ import annotations
+
 import base64
 import binascii
 import hashlib
 import mimetypes
 from pathlib import Path
 from typing import Any
+
 import httpx
+
 from ..storage.db import Database
 from ..storage.util import ulid
+
 # 允许下载的最大体积（字节）。视频通常几 MB，预签名链接失效前必须取回。
 MAX_BYTES = 512 * 1024 * 1024
+
 _EXT_BY_MIME = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
@@ -29,15 +36,21 @@ _EXT_BY_MIME = {
     "audio/mpeg": ".mp3",
     "audio/wav": ".wav",
 }
+
+
 class AssetStore:
     """素材仓库：落盘 + 登记 + 路径解析。"""
+
     def __init__(self, db: Database, data_dir: Path):
         self.db = db
         self.data_dir = Path(data_dir)
         self.root = self.data_dir / "assets"
+
     # ---------- 路径 ----------
+
     def resolve(self, local_path: str) -> Path:
         """把库里的相对路径解析成真实文件路径。
+
         库里存的是相对用户数据目录的路径（数据目录可迁移）；历史上也有直接存
         绝对路径的行，这里两种都兼容。
         """
@@ -45,21 +58,26 @@ class AssetStore:
         if p.is_absolute():
             return p
         return self.data_dir / p
+
     def _rel(self, path: Path) -> str:
         """存库用相对路径（相对数据目录）。"""
         try:
             return path.relative_to(self.data_dir).as_posix()
         except ValueError:
             return path.as_posix()
+
     def rel_path(self, path: str | Path) -> str:
         """对外版：把任意路径转成库内使用的相对路径。
+
         存绝对路径的坏处：数据目录一迁移，库里所有素材路径集体失效。
         """
         p = Path(path)
         if p.is_absolute():
             return self._rel(p)
         return p.as_posix()
+
     # ---------- 写入 ----------
+
     def save_bytes(
         self,
         project_id: str,
@@ -98,6 +116,7 @@ class AssetStore:
             self.db.insert("assets", row)
         row["source_url"] = source_url
         return row
+
     def save_remote(
         self,
         project_id: str,
@@ -139,6 +158,7 @@ class AssetStore:
             project_id, kind, data, ext=ext,
             character_id=character_id, shot_id=shot_id, source_url=url,
         )
+
     def _save_data_url(
         self,
         project_id: str,
@@ -165,7 +185,9 @@ class AssetStore:
             project_id, kind, data, ext=ext,
             character_id=character_id, shot_id=shot_id,
         )
+
     # ---------- 读取 ----------
+
     def list_project(self, project_id: str) -> list[dict[str, Any]]:
         rows = self.db.list(
             "SELECT * FROM assets WHERE project_id=? AND kind<>'work' ORDER BY created_at",

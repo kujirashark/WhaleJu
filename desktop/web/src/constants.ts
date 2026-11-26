@@ -7,6 +7,7 @@ export const IMG = {
   old: './assets/old.jpg',
   hero: './assets/hero.jpg',
 }
+
 export const STEPS = [
   { n: '写剧本', d: '按你说的集数写' },
   { n: '确认剧本', d: '你确认后才继续' },
@@ -17,6 +18,7 @@ export const STEPS = [
   { n: '看成片', d: '前 30 秒' },
   { n: '导出视频', d: '竖屏 MP4' },
 ]
+
 export const ROLES = [
   { k: 'child', name: '八岁', img: IMG.child },
   { k: 'teen', name: '十八岁', img: IMG.teen },
@@ -24,6 +26,7 @@ export const ROLES = [
   { k: 'mid', name: '四十五岁', img: IMG.mid },
   { k: 'old', name: '七十岁', img: IMG.old },
 ]
+
 export interface Shot { i: number; t: string; img: string; key: boolean; model: string; cost: number }
 export const SHOTS: Shot[] = [
   { i: 1, t: '院子里 · 童年跑过', img: IMG.child, key: true, model: '可灵（你的密钥）', cost: 16 },
@@ -39,6 +42,7 @@ export const SHOTS: Shot[] = [
   { i: 11, t: '夕阳 · 大远景', img: IMG.old, key: false, model: '海螺 AI', cost: 9 },
   { i: 12, t: '背影 · 定格', img: IMG.old, key: true, model: '可灵（你的密钥）', cost: 16 },
 ]
+
 export const TEMPLATES: Record<string, string> = {
   life: '讲一个普通人的一生，从八岁到七十岁，三集竖屏短剧',
   city: '都市逆袭：被裁员的中年程序员靠 AI 重新翻身，三集',

@@ -3,8 +3,10 @@ import { onMounted } from 'vue'
 import SlotCard from '@/components/settings/SlotCard.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
+
 const settings = useSettingsStore()
 const ui = useUiStore()
+
 // 每项都必须自己配置：不再假定本地已部署模型，也不假定任何默认可用。
 // 来源只有两种：自带密钥（owned）与本机模型（local）。纯开源版无平台代采。
 const groups = [
@@ -25,12 +27,15 @@ const groups = [
     { v: 'local', t: '在你电脑上运行', d: '需自行部署 TTS 并填地址', p: '本机自负' },
   ] },
 ]
+
 onMounted(() => settings.load())
+
 async function save() {
   const n = await settings.save()
   ui.toast(n ? `已保存 ${n} 项配置，记得逐项点「测试连接」验证后才能用` : '请先选择来源并填好地址')
 }
 </script>
+
 <template>
   <main class="view on">
     <div class="settings">

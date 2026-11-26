@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
+
 // Tauri 以 file:// 加载，history 模式会 404，必须用 hash。
 export const router = createRouter({
   history: createWebHashHistory(),

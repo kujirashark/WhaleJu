@@ -1,26 +1,34 @@
 """真实内容生成：用已配置的 text Provider 生成剧本/大纲/镜头。
+
 去演示化要点：
 - 没有配置/验证 text 能力 → 明确抛 NoProviderError，不返回任何预置示例文本。
 - 调用真实 LLM，把结果结构化后存 projects 表，前端只读引擎事实。
 - LLM 返回不可解析时如实报错，不用硬编码剧本冒充生成结果。
 """
 from __future__ import annotations
+
 import json
 import re
+
 from ..adapters.base import ImageGenRequest, TextGenRequest
 from ..adapters.registry import ProviderRegistry
 from ..storage.db import Database
 from ..storage.util import ulid, utc_now
+
+
 class NoProviderError(Exception):
     def __init__(self, message: str, code: str = "E4001"):
         super().__init__(message)
         self.code = code
+
+
 class ContentGenerator:
     def __init__(self, db: Database, registry: ProviderRegistry, assets=None):
         self.db = db
         self.registry = registry
         # 素材落地仓库：厂商给的临时链接会过期，必须取回本机
         self.assets = assets
+
     def _provider(self):
         route = self.registry.route("text", "key")
         if not route:
@@ -29,6 +37,7 @@ class ContentGenerator:
         if not provider:
             raise NoProviderError("文本模型当前不可用，请重新测试连接")
         return provider
+
     async def _ask(self, prompt: str, system: str, max_tokens: int = 2048) -> str:
         provider = self._provider()
         import asyncio
@@ -41,6 +50,7 @@ class ContentGenerator:
         if not content:
             raise NoProviderError("文本模型没有返回内容")
         return content
+
     @staticmethod
     def _script_prompt(
         idea: str,
@@ -49,6 +59,7 @@ class ContentGenerator:
         prev: list[dict] | None = None,
     ) -> tuple[str, str]:
         """构造剧本提示词。
+
         集数由用户想法解析而来（没说就 1 集），绝不写死 3 集。
         episode_index 不为空时只写这一集 —— 一集一集做，省 token、也少被限流截断。
         """
@@ -71,17 +82,20 @@ class ContentGenerator:
                 )
                 prompt += f"。前面已经写好的剧情：{brief}。请接着往下写，不要重复前面的情节。"
             return system, prompt
+
         system = (
             "你是短剧编剧。只输出 JSON，不要输出其他文字。格式：" + fmt +
             f"。写 {total} 集，每集一个明确的人生阶段，正文 150-250 字，语言口语化。"
         )
         return system, f"根据用户想法写一部 {total} 集竖屏短剧。用户想法：{idea}"
+
     @staticmethod
     def _script_budget(total: int, episode_index: int | None = None) -> int:
         """max_tokens 预算：一集一集写时只给一集的量，别浪费。"""
         if episode_index:
             return 1600
         return max(1200, min(4096, 1400 * max(1, int(total or 1))))
+
     def _load_script(self, project_id: str) -> dict:
         with self.db.read() as c:
             row = c.execute("SELECT script_json FROM projects WHERE id=?", (project_id,)).fetchone()
@@ -89,6 +103,7 @@ class ContentGenerator:
             return json.loads(row["script_json"]) if row and row["script_json"] else {}
         except (json.JSONDecodeError, TypeError):
             return {}
+
     def _save_script(
         self,
         project_id: str,
@@ -99,6 +114,7 @@ class ContentGenerator:
     ) -> dict:
         data, partial = self._parse_json_lenient(raw)
         episodes = data.get("episodes") or []
+
         if episode_index:
             # 逐集写作：只把这一集并进已有剧本，不动别的集
             base = self._load_script(project_id)
@@ -109,6 +125,7 @@ class ContentGenerator:
             title = str(base.get("title") or data.get("title") or idea[:12])
         else:
             title = str(data.get("title") or idea[:12])
+
         payload = {
             "title": title,
             "episodes": episodes,
@@ -123,6 +140,7 @@ class ContentGenerator:
                 (json.dumps(payload, ensure_ascii=False), version, project_id),
             )
         return payload
+
     def _target_count(self, project_id: str, fallback: int = 1) -> int:
         """项目目标集数：来自建项目时解析的结果，不写死。"""
         with self.db.read() as c:
@@ -132,6 +150,7 @@ class ContentGenerator:
         except (TypeError, ValueError):
             n = 0
         return n if n > 0 else max(1, fallback)
+
     async def generate_script(
         self,
         project_id: str,
@@ -146,6 +165,7 @@ class ContentGenerator:
         system, prompt = self._script_prompt(idea, total, episode_index, prev)
         raw = await self._ask(prompt, system, self._script_budget(total, episode_index))
         return self._save_script(project_id, idea, version, raw, episode_index)
+
     async def stream_script(
         self,
         project_id: str,
@@ -154,6 +174,7 @@ class ContentGenerator:
         episode_index: int | None = None,
     ):
         """流式生成剧本：逐块 yield 文本增量，完整结果落库后 yield 终帧。
+
         yield 格式：
         - ("token", 文本片段)
         - ("call", 调用记录)  每一次真实 HTTP 尝试，界面据此显示调用日志
@@ -193,6 +214,7 @@ class ContentGenerator:
         if not raw.strip():
             raise NoProviderError("文本模型没有返回内容")
         yield ("done", self._save_script(project_id, idea, version, raw, episode_index))
+
     async def generate_shots(self, project_id: str, shot_count: int = 12) -> dict:
         system = (
             "你是分镜师。只输出 JSON，不要输出其他文字。格式："
@@ -221,9 +243,11 @@ class ContentGenerator:
             c.execute("UPDATE projects SET shots_json=? WHERE id=?",
                       (json.dumps(payload, ensure_ascii=False), project_id))
         return payload
+
     async def generate_characters(self, project_id: str, count: int = 5) -> list[dict]:
         """用已配置的 image 模型生成定妆参考图；未配置则明确拒绝。
         返回 [{id, name, desc_text, ref_url}]，并落 characters 表。
+
         生成的图片会立刻下载到本机（assets 目录）并登记 assets 表：
         厂商给的是带签名、会过期的链接，直接存链接的话项目过一天全是裂图。
         下载失败时保留原厂链接兜底，不谎报成功。
@@ -234,6 +258,7 @@ class ContentGenerator:
         provider = self.registry.get(route.provider_id)
         if not provider:
             raise NoProviderError("图片模型当前不可用，请重新测试连接")
+
         with self.db.read() as c:
             row = c.execute("SELECT idea_text, script_json FROM projects WHERE id=?", (project_id,)).fetchone()
         idea = (row["idea_text"] if row else "") or "短剧"
@@ -293,6 +318,7 @@ class ContentGenerator:
             except Exception as exc:  # noqa: BLE001
                 raise NoProviderError(f"生成第 {i + 1} 个角色失败：{str(exc)[:80]}")
         return result
+
     @staticmethod
     def _parse_json(raw: str) -> dict:
         """从模型输出中稳健提取 JSON（容忍 ```json 包裹与前后说明文字）。"""
@@ -308,10 +334,12 @@ class ContentGenerator:
             return json.loads(text)
         except json.JSONDecodeError as exc:
             raise NoProviderError(f"文本模型返回的内容无法解析为剧本：{exc}")
+
     # ── 残缺输出的降级提取 ──────────────────────────────────────
     # 模型偶尔会被截断（厂商关流、max_tokens 触顶、限流中断），
     # 输出停在半截 JSON 上。此时整份丢弃是可惜的 ——
     # 已经写完的那几集是好的，应该救回来交给用户。
+
     @staticmethod
     def _unescape(s: str) -> str:
         """把 JSON 字符串片段反转义（片段可能没闭合，但要能安全处理）。"""
@@ -320,8 +348,10 @@ class ContentGenerator:
         except (json.JSONDecodeError, ValueError):
             return (s.replace('\\"', '"').replace("\\n", "\n")
                      .replace("\\t", "\t").replace("\\\\", "\\"))
+
     def _extract_episodes(self, raw: str) -> list[dict]:
         """从残缺 JSON 里逐个抠出 episode 的 idx/title/tags/script。
+
         script 的正则允许未闭合（模型正写到一半），
         这样至少能保住"已完整写完的那几集 + 正在写的那一集的部分正文"。
         """
@@ -344,6 +374,7 @@ class ContentGenerator:
                 "script": self._unescape(sm.group(1)) if sm else "",
             })
         return episodes
+
     def _extract_shots(self, raw: str) -> list[dict]:
         """从残缺 JSON 里抠出已经写完的镜头。"""
         shots: list[dict] = []
@@ -360,8 +391,10 @@ class ContentGenerator:
                 "importance": self._unescape(im.group(1)) if im else "transition",
             })
         return shots
+
     def _parse_json_lenient(self, raw: str, kind: str = "script") -> tuple[dict, bool]:
         """解析模型输出。返回 (数据, 是否残缺)。
+
         残缺时不丢弃：至少保住已经写完的部分，让用户拿到部分成果，
         而不是一句"生成失败"让整轮白跑。
         """

@@ -2,16 +2,20 @@
 /** 模型调用日志面板：把每次真实调用摊开给用户看，不再是黑盒。 */
 import { computed, ref } from 'vue'
 import { useCallsStore } from '@/stores/calls'
+
 const props = withDefaults(defineProps<{ compact?: boolean }>(), { compact: false })
 const calls = useCallsStore()
 const open = ref(true)
+
 const rows = computed(() => calls.live)
+
 function statusText(e: any) {
   if (!e.status) return '失败'
   return String(e.status)
 }
 function isFail(e: any) { return !e.status || e.status >= 400 }
 </script>
+
 <template>
   <div class="calllog" :class="{ compact: props.compact }">
     <button class="cl-head" type="button" @click="open = !open" :aria-expanded="open">
@@ -34,6 +38,7 @@ function isFail(e: any) { return !e.status || e.status >= 400 }
     </div>
   </div>
 </template>
+
 <style scoped>
 .calllog{margin-top:12px;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--panel2)}
 .cl-head{width:100%;display:flex;align-items:center;gap:8px;padding:8px 11px;background:none;border:none;color:var(--ink2);font-size:11.5px;cursor:pointer;text-align:left}

@@ -1,11 +1,13 @@
 //! 本地引擎进程管理：Tauri 桌面壳负责拉起 / 停止 FastAPI 子进程，
 //! 并通过 IPC 把随机令牌交给前端，令牌不经过任何公开 HTTP 端点。
+
 use serde::Serialize;
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 /// 前端调用 start_engine 后拿到的连接信息。
 #[derive(Debug, Clone, Serialize)]
 pub struct EngineInfo {
@@ -15,6 +17,7 @@ pub struct EngineInfo {
     pub base_url: String,
     pub error: Option<String>,
 }
+
 impl Default for EngineInfo {
     fn default() -> Self {
         Self {
@@ -26,20 +29,24 @@ impl Default for EngineInfo {
         }
     }
 }
+
 #[derive(Default)]
 pub struct EngineState {
     child: Mutex<Option<Child>>,
     info: Mutex<EngineInfo>,
 }
+
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .and_then(|l| l.local_addr())
         .map(|a| a.port())
         .unwrap_or(7420)
 }
+
 fn port_open(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_err()
 }
+
 fn random_token() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -48,6 +55,7 @@ fn random_token() -> String {
     let pid = std::process::id() as u128;
     format!("{:032x}{:032x}", nanos, pid)
 }
+
 fn find_python(root: &Path) -> Result<std::path::PathBuf, String> {
     let candidates = [
         root.join(".venv").join("Scripts").join("python.exe"),
@@ -60,6 +68,7 @@ fn find_python(root: &Path) -> Result<std::path::PathBuf, String> {
         .cloned()
         .ok_or_else(|| format!("未找到 Python 虚拟环境，请在 {} 执行 python -m venv .venv", root.display()))
 }
+
 impl EngineState {
     pub fn info(&self) -> EngineInfo {
         self.info
@@ -67,14 +76,14 @@ impl EngineState {
             .map(|g| g.clone())
             .unwrap_or_default()
     }
+
     /// 打包模式：安装包内捆绑的 PyInstaller 引擎（resources/engine/whaleju-engine.exe）。
     /// 存在则直接拉起，不再要求用户机器上有源码与 .venv。
     fn bundled_engine(resource_dir: &Path) -> Option<std::path::PathBuf> {
-        let exe = resource_dir
-            .join("engine")
-            .join("whaleju-engine.exe");
+        let exe = resource_dir.join("engine").join("whaleju-engine.exe");
         exe.is_file().then_some(exe)
     }
+
     pub fn start(&self, root: &Path, resource_dir: &Path, data_root: &Path) -> Result<EngineInfo, String> {
         // 已在运行则直接复用（避免重复拉起子进程）
         if let Ok(info) = self.info.lock() {
@@ -82,6 +91,7 @@ impl EngineState {
                 return Ok(info.clone());
             }
         }
+
         let port = free_port();
         let token = random_token();
         // 数据目录：打包模式落用户数据目录（AppData），开发模式沿用源码内 engine/data
@@ -92,6 +102,7 @@ impl EngineState {
         };
         std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
 
+        // 打包模式：直接运行内置引擎；开发模式：用 .venv 的 python -m uvicorn
         let (program, args): (std::path::PathBuf, Vec<String>) =
             if let Some(exe) = Self::bundled_engine(resource_dir) {
                 (
@@ -122,6 +133,7 @@ impl EngineState {
                     ],
                 )
             };
+
         let mut cmd = Command::new(&program);
         cmd.args(&args)
             .env("MANGJU_LOCAL_TOKEN", &token)
@@ -129,6 +141,7 @@ impl EngineState {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+
         // Windows 下不弹出黑色控制台窗口
         #[cfg(windows)]
         {
@@ -136,9 +149,11 @@ impl EngineState {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
+
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("启动引擎失败：{}（{}）", e, program.display()))?;
+
         // 轮询端口，最长 20 秒
         let mut ready = false;
         for _ in 0..80 {
@@ -155,6 +170,7 @@ impl EngineState {
                 program.display()
             ));
         }
+
         let mut guard = self.child.lock().map_err(|e| e.to_string())?;
         *guard = Some(child);
         let info = EngineInfo {
@@ -167,6 +183,7 @@ impl EngineState {
         *self.info.lock().map_err(|e| e.to_string())? = info.clone();
         Ok(info)
     }
+
     pub fn stop(&self) -> Result<(), String> {
         if let Ok(mut guard) = self.child.lock() {
             if let Some(mut child) = guard.take() {
@@ -180,9 +197,11 @@ impl EngineState {
         Ok(())
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn start_then_stop_engine() {
         let root = Path::new("../..").canonicalize().unwrap();
@@ -201,6 +220,7 @@ mod tests {
         state.stop().expect("引擎应能停止");
         assert!(!state.info().running, "停止后应为非运行态");
     }
+
     #[test]
     fn token_is_unique() {
         assert_ne!(random_token(), random_token());

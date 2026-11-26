@@ -1,22 +1,30 @@
 """发布套件：ffmpeg 合成（字幕）+ 发布文案（含 AI 生成声明）。
+
 设计 v3.1 §5.5：AI 声明由「成片元数据 + 发布文案 + 作品库标记」三处承担，
 **不再烧进画面**（用户要求：画面不能被水印污染）。
+
 为什么挪走：AI 标识烧进画面会在成片左上角留一块常驻黑底白字，
 严重破坏画面质感；而平台侧发布时本来就会要求勾选「内容由 AI 生成」，
 画面内再烧一遍是重复的。声明信息一条都没少，只是换了个不伤画面的载体。
 """
 from __future__ import annotations
+
 import asyncio
 import os
 import shutil
 import subprocess
 from pathlib import Path
+
 from ..storage.util import ulid, utc_now
+
 # AI 生成声明：模板锁定段落，LLM 只填正文，此段不改写
 AI_DECLARATION = "本视频由 AI 生成，内容已按平台要求标识。"
+
 # ffmpeg 可执行文件的最小合理体积：真实的 ffmpeg 至少几 MB。
 # WinGet 的 Links 目录里会留下 0 字节的失效 shim，用它做阈值正好把假货挡掉。
 _FFMPEG_MIN_SIZE = 1 << 20   # 1 MiB
+
+
 def _is_real_ffmpeg(path: Path | str | None) -> bool:
     """校验候选路径是不是一个真的能跑的 ffmpeg（排除 0 字节 shim）。"""
     if not path:
@@ -30,8 +38,11 @@ def _is_real_ffmpeg(path: Path | str | None) -> bool:
     except OSError:
         return False
     return True
+
+
 def _font_file() -> str | None:
     """找一个能写中文的字体文件。
+
     留着是因为字幕烧字（可选功能）随时可能要用：Windows 上 ffmpeg 找不到
     默认字体时会直接失败，必须显式给字体文件。这里按优先级找微软雅黑 / 黑体。
     """
@@ -52,6 +63,8 @@ def _font_file() -> str | None:
         except OSError:
             continue
     return None
+
+
 def _candidate_dirs() -> list[Path]:
     """按优先级列出可能装了 ffmpeg 的目录。"""
     dirs: list[Path] = []
@@ -92,12 +105,16 @@ def _candidate_dirs() -> list[Path]:
         if p.is_dir():
             dirs.append(p)
     return dirs
+
+
 def _ffmpeg_path() -> str | None:
     """找一个真正能跑的 ffmpeg。
+
     历史坑：Windows 上 WinGet 之类的包管理会在 PATH 里留下 0 字节的失效 shim，
     shutil.which() 会把它当命中，但执行时报"不是有效的 Win32 应用程序"。
     只查 PATH 会漏掉真实安装位置（WinGet 的包目录里就有完整的 ffmpeg），
     导致明明装了却报"本机没有 ffmpeg"。
+
     现在的顺序：
       1) 环境变量 WHALESHARK_FFMPEG / FFMPEG_BINARY 显式指定
       2) PATH 上的 ffmpeg（校验体积，0 字节 shim 直接跳过）
@@ -134,6 +151,8 @@ def _ffmpeg_path() -> str | None:
         except OSError:
             continue
     return None
+
+
 class PublishKit:
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
@@ -141,9 +160,11 @@ class PublishKit:
         self.tmp_dir = data_dir / "tmp"
         self.works_dir.mkdir(parents=True, exist_ok=True)
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
+
     def caption(self, project_name: str, episode: int, body: str = "") -> str:
         main = body or f"《{project_name}》第 {episode} 集。"
         return f"{main}\n\n{AI_DECLARATION}"
+
     async def compose(
         self,
         video_path: str | Path,
@@ -152,6 +173,7 @@ class PublishKit:
         ai_badge: bool = True,   # 声明仍随作品一起交付（写进元数据）
     ) -> dict:
         """规范化成片：统一规格 + 写入 AI 生成声明（写在文件元数据里，不动画面）。
+
         没有 ffmpeg 时降级为复制源视频：画面里本来就没有水印，
         复制不会造成「未标识违规」——声明已随作品元数据与发布文案一起交付。
         """
@@ -200,6 +222,7 @@ class PublishKit:
             "exported_at": utc_now(),
             "size_bytes": out.stat().st_size,
         }
+
     def export_frames(
         self,
         images: list[Path],
@@ -208,8 +231,10 @@ class PublishKit:
         work_id: str | None = None,
     ) -> dict:
         """没有 ffmpeg 时的兜底导出：把画面素材包放到作品库目录。
+
         不能合成 mp4 就不合成，但成果必须交到用户手上 ——
         目录里放好所有画面 + 一份说明，装上 ffmpeg 后可以自行合成。
+
         复用同一项目的目录：重复点"重新导出"不会再堆出几份几十 MB 的副本。
         """
         work_id = work_id or ulid()
@@ -266,6 +291,7 @@ class PublishKit:
             "exported_at": utc_now(),
             "size_bytes": sum(f.stat().st_size for f in folder.iterdir() if f.is_file()),
         }
+
     async def compose_slides(
         self,
         images: list[str | Path],
@@ -274,8 +300,10 @@ class PublishKit:
         ratio: str = "9:16",
     ) -> dict:
         """把一组画面合成一条视频（动态漫成片）。
+
         没有视频模型时，第 6 步生成的是画面，第 8 步仍然要能导出一条成片：
         这里按顺序把画面拼成 mp4，并强制写入 AI 标识。
+
         需要本机有 ffmpeg。没有就如实报错 —— 绝不用假文件冒充成片。
         """
         files = [Path(p) for p in images if p and Path(p).exists()]
@@ -284,6 +312,7 @@ class PublishKit:
         ffmpeg = _ffmpeg_path()
         if not ffmpeg:
             raise RuntimeError("本机没有安装 ffmpeg，无法把画面合成视频。请安装 ffmpeg 后重试。")
+
         work_id = work_id or ulid()
         out = self.works_dir / f"{work_id}.mp4"
         listing = self.tmp_dir / f"{work_id}.txt"
@@ -336,3 +365,4 @@ class PublishKit:
             "exported_at": utc_now(),
             "size_bytes": out.stat().st_size,
         }
+

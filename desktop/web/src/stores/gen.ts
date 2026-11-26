@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { engine } from '@/api/engine'
+
 export interface GenStartResult {
   ok: boolean
   error?: string
@@ -9,6 +10,7 @@ export interface GenStartResult {
   need?: number          // 需要的额度
   balance?: number       // 当前余额
 }
+
 /**
  * 生成进度（设计 §6.7 useGenStore）：只渲染引擎事实，不做业务判断。
  * 去演示化：没有演示降级动画。引擎未就绪 / 未配置模型时给出明确错误，
@@ -28,10 +30,12 @@ export interface GenItem {
   ability?: string
   fail_reason?: string | null
 }
+
 /** 引擎里已落库的镜头素材（持久化）：引擎重启、刷新页面后画面都还在。 */
 const persisted = ref<GenItem[]>([])
 /** 进度来自数据库（引擎重启过，内存批次没了）——界面要如实告诉用户 */
 const restoredFromDb = ref(false)
+
 export const useGenStore = defineStore('gen', () => {
   const batchId = ref('')
   const done = ref(0)
@@ -59,6 +63,7 @@ export const useGenStore = defineStore('gen', () => {
   const billing = ref<'own_key' | 'platform_credits' | ''>('')
   const notStarted = ref(true)
   let pollTimer: ReturnType<typeof setInterval> | undefined
+
   function apply(p: any) {
     if (!p) return
     batchId.value = p.batch_id || ''
@@ -78,6 +83,7 @@ export const useGenStore = defineStore('gen', () => {
     if (typeof p.unit_price === 'number') unitPrice.value = p.unit_price
     if (typeof p.estimated_cost === 'number') estimatedCost.value = p.estimated_cost
   }
+
   function reset() {
     stopPolling()
     batchId.value = ''; done.value = 0; total.value = 0; running.value = 0
@@ -89,6 +95,7 @@ export const useGenStore = defineStore('gen', () => {
     ability.value = 'image'; unitPrice.value = 0; estimatedCost.value = 0; billing.value = ''
     restoredFromDb.value = false
   }
+
   /**
    * 加载已落库的镜头素材。
    * 生成批次只存在引擎内存里，引擎一重启 progress 就变"未开始"，
@@ -98,6 +105,7 @@ export const useGenStore = defineStore('gen', () => {
     const r = await engine.api<{ items: GenItem[] }>(`/api/projects/${projectId}/shots/media`)
     if (r?.items) persisted.value = r.items
   }
+
   /**
    * 画面清单：优先用引擎的持久化素材（刷新/重启后仍在），
    * 内存批次只用来补充"生成中"这类实时状态。
@@ -123,6 +131,7 @@ export const useGenStore = defineStore('gen', () => {
       }
     })
   }
+
   /**
    * 开始真实生成批次。返回 { ok, error }。
    * 引擎未连接、未配置模型、额度不足等都以明确错误返回，不做本地演示。
@@ -161,12 +170,14 @@ export const useGenStore = defineStore('gen', () => {
     lastErrorBalance.value = d?.balance ?? null
     return { ok: false, error: lastError.value, code: d?.code, hint: d?.hint }
   }
+
   async function poll(projectId: string) {
     const p = await engine.api(`/api/projects/${projectId}/generation/progress`)
     if (p) apply(p)
     if (p?.restored_from_db) restoredFromDb.value = true
     if (p && total.value > 0 && done.value >= total.value && !paused.value) stopPolling()
   }
+
   /**
    * 只重新生成某一个镜头（其它镜头不动）。
    * 用户要的是"这张不满意，换一张"，整批重跑等于白烧一轮额度。
@@ -205,6 +216,7 @@ export const useGenStore = defineStore('gen', () => {
     }
     return { ok: true, media_url: r.media_url }
   }
+
   /** 刷新页面后恢复进行中的批次：进度在引擎里，这里重新拉一次并继续盯。 */
   async function restore(projectId: string) {
     stopPolling()
@@ -215,18 +227,22 @@ export const useGenStore = defineStore('gen', () => {
       pollTimer = setInterval(() => poll(projectId), 800)
     }
   }
+
   function stopPolling() {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = undefined }
   }
+
   async function pause(projectId: string) {
     const r = await engine.api(`/api/projects/${projectId}/generation/pause`, { method: 'POST' })
     if (r) apply(r)
   }
+
   async function resume(projectId: string) {
     const r = await engine.api(`/api/projects/${projectId}/generation/resume`, { method: 'POST' })
     if (r) apply(r)
     if (!pollTimer) pollTimer = setInterval(() => poll(projectId), 500)
   }
+
   return {
     batchId, done, total, running, failed, queued, paused, eta, items, failedItems,
     routeReason, lastError, lastErrorCode, lastErrorHint, lastErrorNeed, lastErrorBalance,

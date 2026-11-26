@@ -8,6 +8,7 @@ import { useCallsStore } from '@/stores/calls'
 import { engine } from '@/api/engine'
 import { parseStreamEpisodes } from '@/utils/stream'
 import CallLogPanel from './CallLogPanel.vue'
+
 const router = useRouter()
 const project = useProjectStore()
 const gen = useGenStore()
@@ -25,10 +26,12 @@ const firstAsset = computed(() => {
   const live = gen.items.find((i: any) => i.status === 'done' && i.asset_ref)
   return live?.asset_ref || null
 })
+
 /** 全部镜头画面（第 7 步网格）：定妆图不算成片画面 */
 const shotAssets = computed(() =>
   project.assets.filter((a: any) => a.url && (a.kind === 'shot' || a.kind === 'video')),
 )
+
 /**
  * 第 6 步的镜头清单。
  * 引擎的生成批次只在内存里，重启就没了 —— 素材其实已经落在库里。
@@ -40,6 +43,7 @@ const visibleShots = computed(() => {
   // 引擎没有批次时：直接用库里还原出来的镜头（画面 + 场景描述）
   return (gen.persisted || []) as any[]
 })
+
 /** 第 1 步单一状态：任何时刻只呈现一种状态的信息，避免空态/忙碌/失败文案同屏打架。
  *  忙碌优先于「已有剧本」：重新生成时旧剧本还在，但界面必须显示进行中，
  *  否则用户点「重新生成这一稿」看不到任何反应。 */
@@ -47,6 +51,7 @@ const visibleShots = computed(() => {
 function roleImg(r: any): string {
   return project.assetUrl(r?.ref_url) || project.assetUrl(r?.remote_url)
 }
+
 const scriptState = computed<'empty' | 'busy' | 'error' | 'done'>(() => {
   if (project.contentBusy) return 'busy'
   // 失败优先于「已有剧本」：重新生成失败时旧稿还在，
@@ -59,9 +64,11 @@ const scriptState = computed<'empty' | 'busy' | 'error' | 'done'>(() => {
 const showOldScript = ref(false)
 /** 当前稿序号（界面不能写死"第一稿"） */
 const scriptVerText = computed(() => project.scriptVer || 1)
+
 /* ── 生成过程的实时呈现 ────────────────────────────────────────
  * 用户要的是"看着它写"：一集一集长出来、当前集高亮、能回看全过程。
  * 之前是 done 时把流式文本清空换成最终稿，整个过程一闪而过。 */
+
 /** 流式文本切出的分集 */
 const liveEps = computed(() => parseStreamEpisodes(project.streamText))
 /** 回看区：把归档的生成过程重新切成集 */
@@ -108,6 +115,7 @@ const liveStageSub = computed(() => {
     ? `已写完 ${done} 集，共 ${total} 集 · 正在实时输出`
     : `共 ${total} 集 · 正在实时输出`
 })
+
 /** 等待首字的秒数：空白等待期必须有交代，否则用户以为卡死 */
 const waitedSec = ref(0)
 let waitTimer: ReturnType<typeof setInterval> | undefined
@@ -126,6 +134,8 @@ watch(
   { immediate: true },
 )
 onUnmounted(() => { if (waitTimer) clearInterval(waitTimer) })
+
+
 /** 流式容器：内容增长时自动滚到底部 */
 const streamBox = ref<HTMLElement | null>(null)
 watch(
@@ -142,27 +152,34 @@ const scriptPill = computed(() => ({
   error: { text: '生成失败', cls: 'p-err' },
   empty: { text: '待生成', cls: 'p-off' },
 }[scriptState.value]))
+
 /** 是否有真实素材可导出（第 8 步前置条件） */
 const hasMaterial = computed(() =>
   project.assets.length > 0 || gen.items.some((i: any) => i.status === 'done' && i.asset_ref),
 )
+
 /** 是否有可展示的模型调用日志 */
 const hasCallLog = computed(() => calls.live.length > 0)
+
 /** 本机能力（导出 mp4 需要 ffmpeg）：导出前要提前告诉用户 */
 const sys = reactive({ ffmpeg: true })
 async function loadSystem() {
   const r = await engine.api<{ ffmpeg: boolean }>('/api/system/capabilities')
   if (r && typeof r.ffmpeg === 'boolean') sys.ffmpeg = r.ffmpeg
 }
+
 function window_open(url: string) { window.open(url, '_blank', 'noopener,noreferrer') }
+
 onMounted(async () => {
   await project.loadDetail()
   await loadSystem()
   // 刷新页面后恢复进行中的生成批次（进度在引擎里，不会丢）
   if (project.currentId) await gen.restore(project.currentId)
 })
+
 /* 流程动作全部交给聊天窗口（见 stores/agent.ts）：
  * 这里只保留"看内容"和"取产物"两类动作，生成/确认/推进一律由 agent 执行。 */
+
 /** 正在重生成的镜头（避免重复点击） */
 const regenBusy = ref('')
 /**
@@ -183,9 +200,11 @@ async function regenShot(it: any) {
     regenBusy.value = ''
   }
 }
+
 /* ── 第 5 步：分镜可以单独编辑、调整、增删 ──────────────────────────
  * 用户要的是"分镜表能改"：改某一镜的描述、调整重要度、挪位置、加一镜、删一镜。
  * 每个镜头有稳定 key，改动后素材关联不串台（引擎负责）。 */
+
 /** 正在编辑的镜头 key（空 = 没在编辑） */
 const editingShot = ref('')
 const editScene = ref('')
@@ -199,6 +218,7 @@ const staleShots = computed<Set<string>>(() => {
   }
   return s
 })
+
 /** 分镜表（引擎权威数据） */
 const shotPlan = computed<any[]>(() => shots.value?.shots || [])
 function startEditShot(s: any) {
@@ -209,6 +229,7 @@ function startEditShot(s: any) {
 function cancelEditShot() {
   editingShot.value = ''
 }
+
 async function saveShot(s: any) {
   if (!editScene.value.trim()) { ui.toast('场景描述不能为空'); return }
   shotBusy.value = true
@@ -226,6 +247,7 @@ async function saveShot(s: any) {
     shotBusy.value = false
   }
 }
+
 /** 挪位置：把这一镜移到第 n 位 */
 async function moveShot(s: any, dir: -1 | 1) {
   const target = (s.idx || 0) + dir
@@ -238,6 +260,7 @@ async function moveShot(s: any, dir: -1 | 1) {
     shotBusy.value = false
   }
 }
+
 /** 新增一镜 */
 async function doAddShot() {
   const scene = window.prompt('新镜头拍什么？', '新镜头：')
@@ -252,6 +275,7 @@ async function doAddShot() {
     shotBusy.value = false
   }
 }
+
 /** 删一镜（连同它已生成的画面） */
 async function doDeleteShot(s: any) {
   if (!window.confirm(`删掉第 ${s.idx} 镜？\n「${s.scene || '（无描述）'}」\n它已经生成的画面也会一起删掉。`)) return
@@ -267,6 +291,7 @@ async function doDeleteShot(s: any) {
     shotBusy.value = false
   }
 }
+
 /** 体积格式化：用户看得懂的 MB / GB。 */
 function prettySize(n?: number | null): string {
   const b = Number(n || 0)
@@ -293,6 +318,7 @@ function downloadWork() {
 }
 /** 第 7 步确认这一版：推进引擎状态（CP3_PENDING → DELIVER），再进导出。 */
 </script>
+
 <template>
   <div class="who">
     <div class="av">
@@ -302,6 +328,7 @@ function downloadWork() {
       <!-- 第 1 步：四种状态互斥，一次只说一件事 -->
       <template v-if="step === 0">
         <div class="card-hd">第 1 步 · 写剧本<span class="pill" :class="scriptPill.cls">{{ scriptPill.text }}</span></div>
+
         <div class="card-bd">
           <!-- 生成中：阶段提示 + 分集实时渲染，不给无关操作 -->
           <template v-if="scriptState === 'busy'">
@@ -326,6 +353,7 @@ function downloadWork() {
                 <span v-for="n in totalEpisodes" :key="n" class="pip" :class="{ on: n <= liveEps.length }"></span>
               </div>
             </div>
+
             <!-- 分集实时渲染：一集一集长出来，当前集高亮 -->
             <div v-if="liveEps.length" ref="streamBox" class="stream-ep">
               <div v-for="(ep, i) in liveEps" :key="i" class="s-ep" :class="{ active: ep.active }">
@@ -341,6 +369,7 @@ function downloadWork() {
               </div>
               <span class="caret">▍</span>
             </div>
+
             <!-- 首字未到：骨架屏占位，避免整块内容突然跳出来 -->
             <div v-else ref="streamBox" class="stream-ep">
               <div v-for="n in totalEpisodes" :key="n" class="s-ep">
@@ -349,6 +378,7 @@ function downloadWork() {
               </div>
             </div>
           </template>
+
           <!-- 生成失败：说清原因 + 给出路 -->
           <template v-else-if="scriptState === 'error'">
             <div class="state-t">这次没生成成功</div>
@@ -368,6 +398,7 @@ function downloadWork() {
               </template>
             </div>
           </template>
+
           <!-- 空态：一句话说明 + 一个主动作 -->
           <template v-else-if="scriptState === 'empty'">
             <p>
@@ -377,6 +408,7 @@ function downloadWork() {
             <div class="chat-hint">在下方聊天框说「写剧本」，我就用你配置的文本模型开始写。</div>
             <div class="note">还没配置模型？在聊天框说「去配置模型」，我带你去设置。</div>
           </template>
+
           <!-- 已完成 -->
           <template v-else>
             <!-- 模型这次没写完：已保住写完的那几集，但必须说清这一稿不全 -->
@@ -391,6 +423,7 @@ function downloadWork() {
               </template>
               <template v-else>共 {{ writtenEpisodes }} 集，已保存到本机。</template>
             </p>
+
             <!-- 刚生成的过程可回看：用户能确认模型确实写了一篇完整稿 -->
             <details v-if="project.lastStream" class="stream-archive">
               <summary>看看模型刚才是怎么写出来的</summary>
@@ -405,6 +438,7 @@ function downloadWork() {
                 </div>
               </div>
             </details>
+
             <div class="script" style="margin-top:14px">
               <template v-for="(ep, i) in script.episodes" :key="i">
                 <p><b>第 {{ ep.idx || i + 1 }} 集 · {{ ep.title }}</b></p>
@@ -415,10 +449,12 @@ function downloadWork() {
               在下方聊天框说「确认剧本」我就往下走，说「继续写第 {{ nextEpisodeIndex }} 集」我就接着写下一集，说「重新生成这一稿」我就重写。
             </div>
           </template>
+
           <!-- 模型调用日志：生成结束后依然保留，便于回看这次到底调了什么 -->
           <CallLogPanel v-if="hasCallLog" />
         </div>
       </template>
+
       <!-- 第 2 步：确认剧本 —— 所见即所得，直接看完整正文 -->
       <template v-else-if="step === 1">
         <div class="card-hd">第 2 步 · 确认剧本<span class="pill" :class="project.status === 'CP1_PENDING' ? 'p-wait' : 'p-ok'">{{ project.status === 'CP1_PENDING' ? '等你确认' : '已确认' }}</span></div>
@@ -444,6 +480,7 @@ function downloadWork() {
           </div>
         </div>
       </template>
+
       <!-- 第 3 步 -->
       <template v-else-if="step === 2">
         <div class="card-hd">第 3 步 · 角色形象<span class="pill p-info">{{ project.characters.length }} 个角色</span></div>
@@ -488,6 +525,7 @@ function downloadWork() {
           </template>
         </div>
       </template>
+
       <!-- 第 4 步 -->
       <template v-else-if="step === 3">
         <div class="card-hd">第 4 步 · 确认角色形象<span class="pill" :class="project.rolesLocked ? 'p-ok' : 'p-wait'">{{ project.rolesLocked ? '已确认' : '等你确认' }}</span></div>
@@ -506,6 +544,7 @@ function downloadWork() {
           <div class="note w">确认后想换形象，需要把已经做好的镜头重新生成一遍。建议先确认再继续。</div>
         </div>
       </template>
+
       <!-- 第 5 步 -->
       <template v-else-if="step === 4">
         <div class="card-hd">第 5 步 · 拆分镜头<span class="pill p-info">{{ shotPlan.length }} 个镜头</span></div>
@@ -516,6 +555,7 @@ function downloadWork() {
             <div class="shot-plan">
               <div v-for="s in shotPlan" :key="s.key" class="sp-row" :class="{ editing: editingShot === s.key }">
                 <div class="sp-no">{{ s.idx }}</div>
+
                 <!-- 普通态：只读展示 -->
                 <template v-if="editingShot !== s.key">
                   <div class="sp-main">
@@ -534,6 +574,7 @@ function downloadWork() {
                     <button class="btn btn-s sp-del" :disabled="shotBusy" @click="doDeleteShot(s)" title="删掉这一镜">删</button>
                   </div>
                 </template>
+
                 <!-- 编辑态：行内改描述与重要度 -->
                 <template v-else>
                   <div class="sp-main">
@@ -597,6 +638,7 @@ function downloadWork() {
           </template>
         </div>
       </template>
+
       <!-- 第 6 步 -->
       <template v-else-if="step === 5">
         <div class="card-hd">第 6 步 · 生成画面<span class="pill" :class="gen.total && done >= gen.total ? 'p-ok' : 'p-info'">{{ done }} / {{ gen.total || '—' }}</span></div>
@@ -675,6 +717,7 @@ function downloadWork() {
           <div class="note">生成在本机引擎里进行，关掉页面不会中断；引擎重启后需要重新生成，已经做好的画面仍然在。</div>
         </div>
       </template>
+
       <!-- 第 7 步：素材取自引擎 assets（刷新后仍在），不是内存态 -->
       <template v-else-if="step === 6">
         <div class="card-hd">第 7 步 · 看成片<span class="pill p-info">{{ visibleShots.length }} 段素材</span></div>
@@ -710,6 +753,7 @@ function downloadWork() {
           </template>
         </div>
       </template>
+
       <!-- 第 8 步 -->
       <template v-else>
         <div class="card-hd">第 8 步 · 导出视频<span class="pill" :class="project.exp.state === 'done' ? 'p-ok' : 'p-off'">{{ project.exp.state === 'done' ? '已导出' : project.exp.state === 'running' ? '导出中' : '未开始' }}</span></div>
@@ -728,6 +772,7 @@ function downloadWork() {
             <div class="ch" :class="{ sel: project.ratio === 'h' }" @click="project.ratio = 'h'"><span class="rad"></span><div><div class="t">横屏 1920 × 1080</div><div class="d">适合 B 站、YouTube</div></div><span class="pr">MP4</span></div>
           </div>
           <div v-if="project.exp.state === 'running'" class="progress solid" style="margin-top:16px"><i :style="{ width: `${project.exp.pct}%` }"></i></div>
+
           <!-- 真实产物：格式、体积、时长都来自引擎实际写出的文件 -->
           <div v-if="project.exp.state === 'done' && project.expResult" class="exp-card">
             <!-- 导完就能看：不用先下载再打开 -->
@@ -756,6 +801,7 @@ function downloadWork() {
               装好 ffmpeg 后在聊天框说「重新导出」就能直接出片。
             </div>
           </div>
+
           <div class="acts">
             <template v-if="project.exp.state === 'done'">
               <button class="btn btn-p" @click="downloadWork">下载成片</button>

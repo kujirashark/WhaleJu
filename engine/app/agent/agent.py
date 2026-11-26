@@ -1,13 +1,16 @@
 """对话 Agent：工具白名单 + 意图改写 + 确认门（设计 v3.1 §5.3）。
+
 Never 层：白名单没有 approve_checkpoint / 扣费工具。
 未确认的写操作一律不执行——Agent 不能"顺手"替用户花钱。
 流程类意图（写剧本/定妆/拆镜/生成画面/导出）只产出意图，实际调用由前端在
 用户确认后执行已有业务接口；Agent 自身不执行写操作，不绕过任何检查点。
 """
 from __future__ import annotations
+
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
+
 ALLOWED_TOOLS = frozenset({
     "get_script", "get_shots", "get_characters",
     "regen_script", "adjust_pacing", "swap_role_image",
@@ -20,6 +23,8 @@ ALLOWED_TOOLS = frozenset({
     # write_next_episode = 多集项目里接着写下一集（一集一集做，省 token）
     "confirm_step", "write_next_episode",
 })
+
+
 @dataclass
 class Intent:
     op: str
@@ -29,9 +34,14 @@ class Intent:
     confirmed: bool = False
     # 意图参数（如用户点名的"第几集"）。前端据此执行，不靠猜。
     params: dict[str, Any] = field(default_factory=dict)
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
 _EP_IDX = re.compile(r"第\s*(\d{1,3}|[零〇一二两三四五六七八九十]{1,3})\s*集")
+
+
 def episode_index_from_text(text: str) -> int | None:
     """从用户话里取出"第几集"（"写第 2 集""写第二集"→2）。取不到返回 None。"""
     m = _EP_IDX.search(text or "")
@@ -40,6 +50,8 @@ def episode_index_from_text(text: str) -> int | None:
     from ..workflow.episode_spec import cn_to_int
     n = cn_to_int(m.group(1))
     return n if n and n > 0 else None
+
+
 # 白话 → 结构意图（规则兜底，无需 LLM 即可离线跑通；生产由 LLM 单次调用产出同结构）
 _RULES = (
     # op 必须与 ALLOWED_TOOLS 的工具名一致（否则确认后也被白名单拒绝）
@@ -60,16 +72,22 @@ _RULES = (
     (("确认剧本", "确认大纲", "确认形象", "确认角色", "确认这一稿", "确认这一版", "确认这个",
       "可以了", "就这样", "没问题", "好了", "下一步", "往下走", "同意", "认可"), "confirm_step", 0.0, "确认当前这一步并推进到下一步"),
 )
+
 # 短句里的"确认 / 好 / 行"：明确是在推进流程，单独处理（长句不算，避免抢问答）
 _SHORT_ACK = {"好", "行", "可以", "嗯", "ok", "OK", "好的", "确认", "同意", "没问题", "就这样", "下一步"}
+
+
 def _is_short_ack(text: str) -> bool:
     """短确认语（<=6 字）且含确认意味 → 推进当前步骤。"""
     t = (text or "").strip()
     if not t or len(t) > 6:
         return False
     return t in _SHORT_ACK or "确认" in t
+
+
 def _looks_like_creation_request(text: str) -> bool:
     """兜底识别：用户直接给内容规格（数字+集/岁）要求写剧本，但没有显式动词。
+
     只在所有明确规则都没命中时才调用，避免抢走"第二集太快了""每集换脸"这类修改诉求。
     """
     import re
@@ -78,9 +96,12 @@ def _looks_like_creation_request(text: str) -> bool:
     # 修改/查询类信号：这些不该被识别成"新建剧本"
     modify_signals = ("太快", "太慢", "换脸", "改脸", "不像", "铺垫", "节奏", "重新拆分", "导出", "进度")
     return has_spec and not any(s in text for s in modify_signals)
+
+
 class ConversationAgent:
     def __init__(self, llm_caller=None):
         self.llm_caller = llm_caller
+
     def classify(self, text: str) -> str:
         t = (text or "").strip()
         # 短确认语（"确认""好了""下一步"）→ 直接推进当前步骤。
@@ -94,6 +115,7 @@ class ConversationAgent:
         if _looks_like_creation_request(t):
             return "gen_script"
         return "answer_question"
+
     async def rewrite(self, text: str, project_id: str | None = None) -> Intent:
         """把用户口语改写为带成本影响的结构意图；不执行任何写操作。"""
         op = self.classify(text)
@@ -115,6 +137,7 @@ class ConversationAgent:
             op="answer_question", scope=project_id or "global",
             cost_impact=0.0, confirm="",
         )
+
     def execute(self, intent: Intent, **kwargs) -> dict:
         """只有 confirmed=True 且 op 在白名单内才执行。"""
         if not intent.confirmed:

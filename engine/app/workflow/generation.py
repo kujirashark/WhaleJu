@@ -1,4 +1,5 @@
 """生成批次管理：设计 §6.4 的 start/pause/progress 三端点后端。
+
 职责边界：
 - 引擎是唯一事实源：12 个镜头的 queued/running/done/failed 全部在此推进。
 - 前端只渲染 progress 返回值，不做任何业务判断。
@@ -7,16 +8,21 @@
   poll 返回的 pending 状态真实轮询（有上限），不再模拟失败、不再伪造进度。
 """
 from __future__ import annotations
+
 import asyncio
 import json
 import time
 from dataclasses import dataclass, field
 from typing import Any
+
 from ..adapters.base import GenResult
+
 from ..adapters.base import ImageGenRequest, VideoGenRequest
 from ..adapters.registry import ProviderRegistry
 from ..storage.db import Database
 from ..storage.util import ulid, utc_now
+
+
 @dataclass
 class ShotProgress:
     shot_id: str
@@ -30,6 +36,8 @@ class ShotProgress:
     ability: str = "image"          # 这一镜用哪种能力生成（image=画面 / video=视频）
     idx: int = 0                    # 分镜表里的序号（展示用，与 shot_id 解耦）
     importance: str = "transition"  # key=重要镜头 / transition=过渡镜头
+
+
 @dataclass
 class Batch:
     id: str
@@ -43,6 +51,7 @@ class Batch:
     # 致命原因：厂商根本不支持这个能力（如把图片模型填进视频槽）。
     # 一旦出现就立刻停批，不把 12 个镜头逐个撞一遍墙。
     fatal_reason: str | None = None
+
     def counts(self) -> dict[str, int]:
         return {
             "done": sum(1 for i in self.items if i.status == "done"),
@@ -51,6 +60,7 @@ class Batch:
             "failed": sum(1 for i in self.items if i.status == "failed"),
             "queued": sum(1 for i in self.items if i.status == "queued"),
         }
+
     def to_progress(self) -> dict[str, Any]:
         c = self.counts()
         done = c["done"]
@@ -82,6 +92,8 @@ class Batch:
                 for i in self.items
             ],
         }
+
+
 SCENES = [
     "院子里 · 童年跑过", "晾衣绳 · 空镜", "站台 · 少年回头", "绿皮车 · 窗边",
     "写字楼 · 深夜加班", "街边 · 一碗面", "医院 · 走廊长椅", "病房 · 光",
@@ -91,10 +103,15 @@ PRICE_PER_SHOT = 9.0            # 视频镜头（平台代采口径）
 PRICE_PER_IMAGE = 1.5           # 画面（平台代采口径）：图片比视频便宜得多
 POLL_INTERVAL_S = 1.5       # 异步视频厂商轮询间隔
 POLL_MAX_ROUNDS = 120       # 单镜头最多轮询轮数（约 3 分钟），超时按失败退回冻结
+
+
 def price_for(ability: str) -> float:
     return PRICE_PER_IMAGE if ability == "image" else PRICE_PER_SHOT
+
+
 def db_shot_id(project_id: str, shot_id: str) -> str:
     """镜头在数据库里的唯一标识。
+
     历史坑：曾经直接把 "s1" 这种短 ID 当 shots.id（全局主键），
     于是项目 A 的第 1 镜会覆盖项目 B 的第 1 镜，
     assets.shot_id 外键也跟着串到别的项目上 —— 换镜头重生成会拿错素材。
@@ -103,8 +120,11 @@ def db_shot_id(project_id: str, shot_id: str) -> str:
     if not project_id or shot_id.startswith(f"{project_id}_"):
         return shot_id
     return f"{project_id}_{shot_id}"
+
+
 def _is_capability_error(reason: str) -> bool:
     """判断错误是不是"厂商根本不支持这个能力"（而不是偶发失败）。
+
     典型场景：把图片模型填进「生成视频」槽，厂商返回 404/405，
     重试多少次都不会成功 —— 必须立刻停下来并说清楚。
     """
@@ -113,6 +133,8 @@ def _is_capability_error(reason: str) -> bool:
         "http 404", "http 405", "http 501", "not found", "method not allowed",
         "unsupported", "no_provider_configured",
     ))
+
+
 class GenerationManager:
     def __init__(self, db: Database, registry: ProviderRegistry, assets=None):
         self.db = db
@@ -121,14 +143,17 @@ class GenerationManager:
         self.assets = assets
         self.batches: dict[str, Batch] = {}
         self.by_project: dict[str, str] = {}
+
     def current(self, project_id: str) -> Batch | None:
         bid = self.by_project.get(project_id)
         return self.batches.get(bid) if bid else None
+
     async def start(self, project_id: str, shot_count: int = 12,
                     ability: str = "image") -> Batch:
         existing = self.current(project_id)
         if existing and not existing.finished_at:
             return existing
+
         batch = Batch(id=ulid(), project_id=project_id, total=shot_count)
         scenes = self._scenes_from_project(project_id, shot_count)
         # shot_id 用镜头的稳定 key（不是序号）：用户重排/删除镜头后，
@@ -145,10 +170,13 @@ class GenerationManager:
         self.by_project[project_id] = batch.id
         batch.task = asyncio.create_task(self._run(batch), name=f"batch-{batch.id}")
         return batch
+
     def _sync_shot_rows(self, project_id: str, items: list[ShotProgress]) -> None:
         """把这一批镜头写进 shots 表。
+
         为什么要写：assets.shot_id 有外键指向 shots(id)，不写就存不下
         "这张画面属于哪个镜头"，而"只重生成这一个镜头"必须靠这个关联。
+
         镜头 ID 必须带项目前缀（db_shot_id）：shots.id 是全局主键，
         用 "s1" 会让不同项目的第 1 镜互相覆盖，素材外键也跟着串台。
         """
@@ -173,9 +201,11 @@ class GenerationManager:
                 )
         except Exception:  # noqa: BLE001 - shots 表写不进去不该阻断生成
             pass
+
     async def regenerate_shot(self, project_id: str, shot_id: str,
                               ability: str | None = None) -> dict[str, Any]:
         """只重跑这一个镜头（其它镜头不动）。
+
         用户要的是"这一张不满意，重新出一张"，不是整批 12 张重跑一遍。
         """
         batch = self.current(project_id)
@@ -207,8 +237,10 @@ class GenerationManager:
             "fail_reason": item.fail_reason,
             "cost": item.cost,
         }
+
     def _drop_shot_assets(self, project_id: str, shot_id: str, index: int | None = None) -> None:
         """删掉这个镜头之前生成的素材（记录 + 本机文件）。
+
         老数据没写 assets.shot_id（没有精确关联），就按生成顺序取对应那一张，
         否则重生成后新旧两张都在，导出会多出一段重复画面。
         """
@@ -243,10 +275,13 @@ class GenerationManager:
                 self.db.execute("DELETE FROM assets WHERE id=?", (r["id"],))
             except Exception:  # noqa: BLE001
                 pass
+
     def _scenes_from_project(self, project_id: str, shot_count: int) -> list[dict]:
         """镜头描述必须来自用户第 5 步确认的真实分镜表。
+
         过去这里用的是写死的示例场景，导致生成的画面和用户看到的镜头表对不上，
         画面里出现的是程序自己编的场景。
+
         现在用户可以单独编辑分镜（见 /api/projects/{pid}/shots 的编辑端点），
         所以这里读的是**编辑后的最新**分镜表。
         """
@@ -281,8 +316,10 @@ class GenerationManager:
                 "idx": n + 1,
             })
         return scenes
+
     def _shot_scene_from_plan(self, project_id: str, shot_id: str) -> str:
         """从分镜表里取某一镜的**最新**描述。
+
         单镜重生成时必须用用户改过的描述，否则"编辑了分镜但重生成还是旧画面"。
         """
         try:
@@ -298,6 +335,7 @@ class GenerationManager:
         except (ValueError, TypeError, AttributeError):
             return ""
         return ""
+
     async def pause(self, project_id: str) -> dict[str, Any] | None:
         batch = self.current(project_id)
         if not batch:
@@ -309,6 +347,7 @@ class GenerationManager:
             return r
         batch.paused = True
         return batch.to_progress()
+
     async def resume(self, project_id: str) -> dict[str, Any] | None:
         batch = self.current(project_id)
         if not batch:
@@ -319,12 +358,15 @@ class GenerationManager:
             return r
         batch.paused = False
         return batch.to_progress()
+
     def progress(self, project_id: str) -> dict[str, Any] | None:
         batch = self.current(project_id)
         return batch.to_progress() if batch else None
+
     async def _wait_pause(self, batch: Batch) -> None:
         while batch.paused:
             await asyncio.sleep(0.1)
+
     async def _prompt_for(self, project_id: str, scene_desc: str) -> str:
         """组装生成提示词：镜头场景 + 已确认角色的外貌锚点（保持人物一致）。"""
         anchors: list[str] = []
@@ -344,12 +386,15 @@ class GenerationManager:
             f"{scene_desc}。竖屏构图，写实电影感，画面干净。\n"
             "人物设定（必须与定妆图保持一致）：\n" + "\n".join(f"- {a}" for a in anchors)
         )
+
     async def _run_shot(self, batch: Batch, idx: int, item: ShotProgress) -> bool:
         """真实生成一个镜头。
+
         能力口径：
         - 第 6 步「生成画面」用 image 能力（图片模型），这与界面语义一致，
           也让只配了文字+图片模型的用户能把流程走完；
         - 若项目已有视频素材能力（配了视频模型），可以按 video 能力生成视频镜头。
+
         计费口径（纯开源版）：
         - 不存在平台额度概念，全部走你自己的厂商账号；
         - 这里只在本地 usage_events 记一条用量与成本估算，供「用量统计」查看。
@@ -365,11 +410,13 @@ class GenerationManager:
                 "请到「设置」里填好并点「测试连接」通过后再生成。"
             )
             return False
+
         provider = self.registry.get(route.provider_id)
         if provider is None:
             item.status = "failed"
             item.fail_reason = "provider_missing"
             return False
+
         unit_price = price_for(ability)
         try:
             prompt = await self._prompt_for(batch.project_id, item.scene_desc)
@@ -391,9 +438,11 @@ class GenerationManager:
                     await asyncio.sleep(POLL_INTERVAL_S)
                     continue
                 break
+
             if result is None or not result.ok:
                 reason = result.fail_reason if result else "no_result"
                 raise RuntimeError(reason or "provider_error")
+
             # 真实成功：按厂商回报的用量结算，落真实素材引用
             item.cost = result.raw_cost_estimate or unit_price
             item.status = "done"
@@ -433,10 +482,13 @@ class GenerationManager:
             item.status = "failed"
             item.fail_reason = reason
             return False
+
     def _register_asset(self, project_id: str, item: ShotProgress) -> str:
         """把生成的画面/视频取回本机并登记 assets 表。
+
         厂商给的是带签名、会过期的链接；不落地的话项目过一晚全是裂图。
         下载失败不阻塞生成（链接仍可临时查看），但会如实记录。
+
         返回本机素材 id：界面靠它读缩略图/视频，永久有效。
         """
         remote = item.asset_ref or ""
@@ -464,6 +516,7 @@ class GenerationManager:
                 pass
         item.asset_id = asset_id or None
         return asset_id
+
     async def _run(self, batch: Batch) -> None:
         """逐镜头真实推进。每次重试切换候选 Provider，不用同一家重复撞墙。"""
         try:

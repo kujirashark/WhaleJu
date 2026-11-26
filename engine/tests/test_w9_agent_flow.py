@@ -1,4 +1,5 @@
 """对话驱动的流程：界面撤掉流程按钮后，agent 必须能自己推进。
+
 背景：用户要求"各个界面的按钮都不出现，统一在下面聊天框里跟 agent 沟通"。
 这意味着 agent 不能只会聊天，还得能：
 - 识别"确认/好了/下一步"这类推进语（confirm_step）
@@ -6,20 +7,29 @@
 - 说出具体是确认哪一步（回复文案按项目状态定制）
 """
 from __future__ import annotations
+
 import json
 import os
 import tempfile
+
 os.environ.setdefault("MANGJU_DATA_DIR", tempfile.mkdtemp(prefix="mangju-test-w9-"))
+
 from fastapi.testclient import TestClient
 import pytest
+
 from engine.app.main import app, DB, LOCAL_TOKEN
 from engine.app.agent.agent import ConversationAgent, ALLOWED_TOOLS
 from engine.tests.conftest import truncate_all
+
 HEADERS = {"X-Local-Token": LOCAL_TOKEN}
+
+
 @pytest.fixture(autouse=True)
 def clean_db():
     DB.init_schema()
     truncate_all(DB)
+
+
 def _events(text: str) -> list[tuple[str, dict]]:
     out = []
     for block in text.split("\n\n"):
@@ -35,7 +45,10 @@ def _events(text: str) -> list[tuple[str, dict]]:
             except json.JSONDecodeError:
                 out.append((ev, dt))
     return out
+
+
 # ── 意图识别 ──────────────────────────────────────────────────────
+
 @pytest.mark.parametrize("text,op", [
     # 推进类
     ("确认", "confirm_step"),
@@ -68,11 +81,16 @@ def _events(text: str) -> list[tuple[str, dict]]:
 ])
 def test_agent_classify(text, op):
     assert ConversationAgent().classify(text) == op, text
+
+
 def test_new_ops_are_allowed():
     """新意图必须在白名单里，否则前端点了也执行不了。"""
     assert "confirm_step" in ALLOWED_TOOLS
     assert "write_next_episode" in ALLOWED_TOOLS
+
+
 # ── 回复文案：要说清是哪一步 ──────────────────────────────────────
+
 def test_confirm_reply_names_the_step():
     client = TestClient(app)
     pid = client.post("/api/projects", json={"idea": "只做一集"}, headers=HEADERS).json()["id"]
@@ -80,26 +98,34 @@ def test_confirm_reply_names_the_step():
     DB.execute("UPDATE projects SET script_json=?, status='CP1_PENDING' WHERE id=?",
                (json.dumps({"title": "剧", "episodes": [{"idx": 1, "title": "一", "script": "正文"}]},
                            ensure_ascii=False), pid))
+
     with client.stream("POST", "/api/chat/stream", headers=HEADERS,
                        json={"message": "确认", "project_id": pid}) as r:
         events = _events("".join(r.iter_text()))
+
     reply = "".join(d.get("t", "") for e, d in events if e == "token")
     assert "剧本" in reply, reply
     intent = next(d for e, d in events if e == "intent")
     assert intent["op"] == "confirm_step"
     assert intent["needs_confirm"] is True
+
+
 def test_write_next_episode_reply_says_which_episode():
     client = TestClient(app)
     pid = client.post("/api/projects", json={"idea": "共三集短剧"}, headers=HEADERS).json()["id"]
     DB.execute("UPDATE projects SET script_json=? WHERE id=?",
                (json.dumps({"title": "剧", "episodes": [{"idx": 1, "title": "一", "script": "正文"}]},
                            ensure_ascii=False), pid))
+
     with client.stream("POST", "/api/chat/stream", headers=HEADERS,
                        json={"message": "写第 2 集", "project_id": pid}) as r:
         events = _events("".join(r.iter_text()))
+
     reply = "".join(d.get("t", "") for e, d in events if e == "token")
     assert "第 2 集" in reply, reply
     assert "共 3 集" in reply, reply
+
+
 def test_confirm_without_project_says_so():
     client = TestClient(app)
     with client.stream("POST", "/api/chat/stream", headers=HEADERS,
@@ -107,6 +133,8 @@ def test_confirm_without_project_says_so():
         events = _events("".join(r.iter_text()))
     reply = "".join(d.get("t", "") for e, d in events if e == "token")
     assert "项目" in reply, reply
+
+
 def test_write_next_episode_respects_requested_index():
     """用户点名"第 2 集"就必须按第 2 集处理，不能当成"下一集"。"""
     client = TestClient(app)
@@ -115,22 +143,30 @@ def test_write_next_episode_respects_requested_index():
     DB.execute("UPDATE projects SET script_json=? WHERE id=?",
                (json.dumps({"title": "剧", "episodes": [{"idx": 1, "title": "一", "script": "正文"}]},
                            ensure_ascii=False), pid))
+
     with client.stream("POST", "/api/chat/stream", headers=HEADERS,
                        json={"message": "写第 2 集", "project_id": pid}) as r:
         events = _events("".join(r.iter_text()))
+
     reply = "".join(d.get("t", "") for e, d in events if e == "token")
     assert "第 2 集" in reply, reply
     intent = next(d for e, d in events if e == "intent")
     assert intent["params"]["episode_index"] == 2, intent
+
+
 def test_write_next_episode_beyond_total_is_refused():
     """1 集的项目说"写第 2 集"，必须说清写不了，而不是默默去写第 1 集。"""
     client = TestClient(app)
     pid = client.post("/api/projects", json={"idea": "只做一集"}, headers=HEADERS).json()["id"]
+
     with client.stream("POST", "/api/chat/stream", headers=HEADERS,
                        json={"message": "写第 2 集", "project_id": pid}) as r:
         events = _events("".join(r.iter_text()))
+
     reply = "".join(d.get("t", "") for e, d in events if e == "token")
     assert "写不了第 2 集" in reply, reply
+
+
 def test_write_next_episode_already_written_is_refused():
     client = TestClient(app)
     pid = client.post("/api/projects", json={"idea": "共三集短剧"}, headers=HEADERS).json()["id"]
@@ -138,11 +174,15 @@ def test_write_next_episode_already_written_is_refused():
                (json.dumps({"title": "剧", "episodes": [
                    {"idx": 1, "title": "一", "script": "正文"},
                    {"idx": 2, "title": "二", "script": "正文"}]}, ensure_ascii=False), pid))
+
     with client.stream("POST", "/api/chat/stream", headers=HEADERS,
                        json={"message": "写第 2 集", "project_id": pid}) as r:
         events = _events("".join(r.iter_text()))
+
     reply = "".join(d.get("t", "") for e, d in events if e == "token")
     assert "已经写过了" in reply, reply
+
+
 def test_answer_question_has_no_confirm_bar():
     """问答类不该弹确认条（needs_confirm=false），否则用户被无意义的确认打断。"""
     client = TestClient(app)

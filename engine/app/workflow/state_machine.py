@@ -1,9 +1,13 @@
 """流程状态机：表驱动，守卫先行，写序固定（设计 v3.1 §5.1）。
+
 安全：CP-2/CP-3 不可跳过在引擎层强制（无跳过 API）。
 """
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Callable
+
+
 @dataclass(frozen=True)
 class Transition:
     current: str
@@ -11,6 +15,8 @@ class Transition:
     next: str
     guard: str | None = None       # trust_mode / sel_ge1 / roles_ready
     effects: tuple[str, ...] = ()
+
+
 TRANSITIONS: tuple[Transition, ...] = (
     Transition("DRAFT", "script_ready", "CP1_PENDING", effects=("gen_outline",)),
     Transition("CP1_PENDING", "approve", "CHARACT", effects=("finalize_script",)),
@@ -26,15 +32,21 @@ TRANSITIONS: tuple[Transition, ...] = (
     Transition("CP3_PENDING", "reject", "PLANNED", effects=("discard_shots",)),
     Transition("DELIVER", "export_done", "DELIVER", effects=("write_works",)),
 )
+
 NON_SKIPPABLE = frozenset({"CP2_PENDING", "CP3_PENDING"})
+
+
 class GuardError(Exception):
     def __init__(self, code: str, message: str):
         self.code = code
         self.message = message
         super().__init__(message)
+
+
 class WorkflowEngine:
     def __init__(self, transitions: tuple[Transition, ...] = TRANSITIONS):
         self._table = transitions
+
     def advance(
         self,
         current: str,
@@ -47,6 +59,7 @@ class WorkflowEngine:
             raise GuardError("E3002", "这一步不能跳过，请先确认")
         if event == "skip":
             event = "approve"
+
         for t in self._table:
             if t.current != current or t.event != event:
                 continue
@@ -54,6 +67,7 @@ class WorkflowEngine:
                 continue
             return t.next, t.effects
         raise GuardError("E3001", "这一步现在还不能确认")
+
     @staticmethod
     def _check_guard(guard: str, ctx: dict) -> bool:
         if guard == "trust_mode":

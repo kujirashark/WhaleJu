@@ -1,15 +1,21 @@
 """OpenAI 兼容适配器：自带 Key 直连厂商（BYOM，零平台接触）。
+
 用于文本槽（DeepSeek/Qwen/OpenAI 等）。视频槽的可灵适配器结构相同，
 仅 endpoint 与请求体不同；本期先交付文本槽真实链路。
 """
 from __future__ import annotations
+
 import asyncio
 import time
+
 import httpx
+
 from .base import (
     GenResult, ImageGenRequest, ProbeResult, ProviderMeta,
     SpeechRequest, TextGenRequest, VideoGenRequest,
 )
+
+
 class OpenAICompatProvider:
     def __init__(self, provider_id: str, endpoint: str, api_key: str, model: str = "deepseek-chat"):
         self.meta = ProviderMeta(
@@ -20,6 +26,7 @@ class OpenAICompatProvider:
         self.api_key = api_key
         self.model = model
         self._results: dict[str, GenResult] = {}
+
     async def probe(self) -> ProbeResult:
         t0 = time.monotonic()
         try:
@@ -38,6 +45,7 @@ class OpenAICompatProvider:
             )
         except Exception as exc:  # noqa: BLE001
             return ProbeResult(ok=False, error=str(exc))
+
     async def submit(self, req: object) -> str:
         if not isinstance(req, TextGenRequest):
             raise ValueError("OpenAICompatProvider 仅支持 text 槽")
@@ -72,6 +80,7 @@ class OpenAICompatProvider:
         except Exception:  # noqa: BLE001
             self._results[task_id] = GenResult(ok=False, fail_reason="timeout")
         return task_id
+
     async def poll(self, task_id: str) -> GenResult:
         await asyncio.sleep(0)
         return self._results.get(task_id, GenResult(ok=False, fail_reason="unknown"))

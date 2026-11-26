@@ -1,9 +1,11 @@
 name: CI
+
 on:
   push:
     branches: [master]
   pull_request:
     branches: [master]
+
 jobs:
   backend:
     name: 引擎测试（Python ${{ matrix.py }})
@@ -20,6 +22,7 @@ jobs:
         run: pip install -r engine/requirements.txt
       - name: 全量测试（隔离数据目录，不污染真实库）
         run: python -m pytest engine/tests -q
+
   frontend:
     name: 前端类型检查与构建
     runs-on: ubuntu-latest

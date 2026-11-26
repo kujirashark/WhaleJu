@@ -1,14 +1,17 @@
 """鲸鲨漫剧本地引擎 FastAPI 入口（127.0.0.1:7420）。"""
 from __future__ import annotations
+
 import asyncio
 import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+
 from fastapi import Depends, FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
+
 from .adapters.base import VideoGenRequest
 from .adapters.registry import ProviderRegistry
 from .adapters.loader import load_configured_providers
@@ -25,6 +28,7 @@ from .workflow.content import ContentGenerator, NoProviderError
 from .workflow.episode_spec import parse_episode_count
 from .agent.agent import ConversationAgent, Intent
 from .publish.kit import PublishKit
+
 DATA_DIR = Path(os.getenv("MANGJU_DATA_DIR", str(Path.cwd() / "engine" / "data")))
 DB = Database(DATA_DIR / "mangju.db")
 WORKFLOW = WorkflowEngine()
@@ -35,11 +39,16 @@ PUBLISH = PublishKit(DATA_DIR)
 ASSETS = AssetStore(DB, DATA_DIR)
 GENERATIONS = GenerationManager(DB, REGISTRY, ASSETS)
 CONTENT = ContentGenerator(DB, REGISTRY, ASSETS)
+
+
 def refresh_providers() -> list[str]:
     """从本机配置重建真实 Provider 注册表（无任何配置时为空）。"""
     return load_configured_providers(DB, REGISTRY)
+
+
 def ensure_providers(ability: str) -> bool:
     """生成前自愈：注册表缺该能力时，从数据库重新加载已验证配置。
+
     背景：Provider 注册表是内存态，只在 lifespan 启动时与保存/测试配置时刷新。
     用户在设置页测通某个能力、或引擎进程比配置更旧时，当前进程内存里仍是旧的
     （空）注册表，生成就会误报 E4001。这里在每次生成前按需重建，杜绝误报。
@@ -48,8 +57,11 @@ def ensure_providers(ability: str) -> bool:
         return True
     refresh_providers()
     return REGISTRY.has_ability(ability)
+
+
 def advance_status(pid: str, event: str, ctx: dict | None = None, skip: bool = False) -> str | None:
     """把项目推过业务状态机的下一个节点，并落库到 projects.status。
+
     业务闭环的关键：状态机原本只有 steps/{step}/advance 端点会调用，
     而前端从不调用它 —— 结果 status 永远停在 DRAFT，首页进度、检查点、
     恢复逻辑全是死的。这里让每个真实业务动作顺手推进自己的节点，
@@ -64,6 +76,8 @@ def advance_status(pid: str, event: str, ctx: dict | None = None, skip: bool = F
         return None
     DB.execute("UPDATE projects SET status=? WHERE id=?", (nxt, pid))
     return nxt
+
+
 def sync_status(pid: str, p: dict, role_count: int = 0) -> str:
     """状态自愈：库里已有真实产物、但 status 还停在早期节点时（例如旧版本生成的数据），
     自动对齐到与产物一致的节点，避免用户点「确认」被守卫挡住、流程卡死。"""
@@ -74,8 +88,11 @@ def sync_status(pid: str, p: dict, role_count: int = 0) -> str:
         st = advance_status(pid, "roles_ready",
                             {"role_count": role_count, "candidate_count": role_count}) or st
     return st
+
+
 def _asset_url(local_path: str | None, asset_id: str | None, base: str = "") -> str | None:
     """素材可访问地址：厂商 URL 直接用；本机文件走引擎的只读文件端点。
+
     必须返回**绝对地址**：前端页面由 Vite/Tauri 提供，<img src="/api/...">
     会指向前端源站而不是引擎源站，结果就是一片裂图。所以这里带上引擎基址。
     """
@@ -87,10 +104,13 @@ def _asset_url(local_path: str | None, asset_id: str | None, base: str = "") -> 
         return None
     prefix = base.rstrip("/") if base else ""
     return f"{prefix}/api/assets/{asset_id}/file?token={LOCAL_TOKEN}"
+
 # 本地鉴权 Token：优先使用桌面壳通过 IPC 注入的随机令牌；
 # 独立运行时自动生成，重启轮换（防本机其他进程调用）。
 # 任何情况下都不通过公开接口下发——Tauri 侧由 start_engine 直接返回。
 LOCAL_TOKEN = os.getenv("MANGJU_LOCAL_TOKEN") or os.urandom(24).hex()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     DB.init_schema()
@@ -101,11 +121,15 @@ async def lifespan(app: FastAPI):
     _sync_episode_counts()
     _sync_role_locks()
     yield
+
+
 def _sync_role_locks() -> None:
     """回填老项目的角色锁定状态。
+
     characters.locked 这一列以前从来没人写 —— "角色形象是否已确认"
     只存在前端内存里，刷新就丢。结果同一屏两套说法：
     中间卡片按项目状态显示"已确认"，右侧列表按前端内存显示"待确认"。
+
     这里按项目状态自愈：项目已经走到 PLANNED 之后的（说明用户当时
     确认过角色形象），就把该项目的角色补上 locked=1。
     """
@@ -130,8 +154,11 @@ def _sync_role_locks() -> None:
             continue
     if fixed:
         print(f"[roles_lock] 回填 {fixed} 个角色的锁定状态")
+
+
 def _sync_episode_counts() -> None:
     """校准老项目的目标集数。
+
     老库里没有 episode_count 这一列（迁移后默认 1），而用户的想法里可能
     明确写了"三集"——这里按想法重新解析一次并写回，保证界面和生成提示词
     都按用户真正要的集数来，而不是一律当成 1 集或一律 3 集。
@@ -149,7 +176,10 @@ def _sync_episode_counts() -> None:
             except Exception as exc:  # noqa: BLE001
                 print(f"[episode_count] 校准失败：{exc}")
                 break
+
+
 app = FastAPI(title="鲸鲨漫剧本地引擎", version="v1-w1", lifespan=lifespan)
+
 # 桌面壳 WebView 的 Origin（仅这三类来源 + 本机绑定 + Token 鉴权，不开放公网）
 app.add_middleware(
     CORSMiddleware,
@@ -161,25 +191,36 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["X-Local-Token", "Content-Type"],
 )
+
+
 def auth(x_local_token: str | None = Header(default=None), token: str | None = None):
     """本地鉴权：优先 header；SSE(EventSource 无法自定义 header) 允许 query token。
+
     仅绑定 127.0.0.1，query token 不会出本机；生产桌面运行时令牌经 IPC 取得。
     """
     if (x_local_token or token) != LOCAL_TOKEN:
         raise HTTPException(401, "本地引擎鉴权失败")
+
+
 class CreateProject(BaseModel):
     # min_length 不能按"字"卡：中文短标题是常态（"小鲸流浪记"只有 5 个字），
     # 之前按 10 字符校验会把正常输入直接挡在 422。
     idea: str = Field(min_length=2, max_length=2000)
     template_id: str = "life_3ep"
+
+
 class AdvanceReq(BaseModel):
     action: str = Field(pattern="^(approve|reject|skip)$")
     payload: dict = Field(default_factory=dict)
+
+
 class GenReq(BaseModel):
     prompt: str
     duration_s: int = 5
     ratio: str = "9:16"
     importance: str = "transition"
+
+
 class SaveModelReq(BaseModel):
     source: str = Field(pattern="^(owned|local)$")
     provider_kind: str = Field(default="openai_compat", pattern="^(openai_compat|kling|jimeng|helo|ollama|comfyui)$")
@@ -187,7 +228,11 @@ class SaveModelReq(BaseModel):
     endpoint: str = Field(min_length=8, max_length=500)   # 真实必填：所有来源都要有服务地址
     model: str = Field(min_length=1, max_length=120)      # 真实必填：模型标识
     credential: str | None = None                          # local 可为空；owned 需密钥
+
+
 SLOTS = ("text", "image", "video", "speech")
+
+
 def _public_slot(slot: str) -> dict:
     with DB.read() as c:
         row = c.execute(
@@ -209,13 +254,19 @@ def _public_slot(slot: str) -> dict:
         "has_credential": bool(row["credential_cipher"]),
         "last_probe_at": row["updated_at"],
     }
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "service": "mangju-engine", "version": "v1-w1"}
+
+
 @app.get("/api/local-token")
 def local_token():
     """仅首次启动由 Tauri 通过 IPC 取走；生产环境应改为 IPC 通道而非 HTTP。"""
     return {"token": LOCAL_TOKEN}
+
+
 @app.post("/api/projects", dependencies=[Depends(auth)])
 def create_project(req: CreateProject):
     pid = ulid()
@@ -233,12 +284,18 @@ def create_project(req: CreateProject):
         "episode_count_explicit": explicit,
         "next_action": "draft_script",
     }
+
+
 @app.get("/api/projects", dependencies=[Depends(auth)])
 def list_projects():
     return {"items": DB.list("SELECT * FROM projects WHERE deleted_at IS NULL ORDER BY updated_at DESC")}
+
+
 @app.get("/api/projects/trash/list", dependencies=[Depends(auth)])
 def list_trash():
     return {"items": DB.list("SELECT * FROM projects WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC")}
+
+
 @app.delete("/api/projects/{pid}", dependencies=[Depends(auth)])
 def delete_project(pid: str):
     """软删项目：列表不再显示，数据仍留在库里，可恢复（误删可救）。"""
@@ -248,6 +305,8 @@ def delete_project(pid: str):
     with DB.tx() as c:
         c.execute("UPDATE projects SET deleted_at=? WHERE id=?", (utc_now(), pid))
     return {"deleted": True, "id": pid}
+
+
 @app.post("/api/projects/{pid}/restore", dependencies=[Depends(auth)])
 def restore_project(pid: str):
     p = DB.get("projects", pid)
@@ -256,8 +315,11 @@ def restore_project(pid: str):
     with DB.tx() as c:
         c.execute("UPDATE projects SET deleted_at=NULL WHERE id=?", (pid,))
     return {"restored": True, "id": pid}
+
+
 def _backfill_character_refs(pid: str, chars: list[dict]) -> None:
     """定妆图自愈落地：旧数据里存的是厂商临时链接（会过期），现场下载一份到本机。
+
     幂等：已落地（有 asset_id）的直接跳过；下载失败保留原链接，界面仍可显示。
     """
     for ch in chars:
@@ -281,6 +343,8 @@ def _backfill_character_refs(pid: str, chars: list[dict]) -> None:
             c.execute("UPDATE characters SET ref_images=? WHERE id=?", (payload, ch["id"]))
         # 同步内存态：否则调用方读到的还是旧的厂商链接
         ch["ref_images"] = payload
+
+
 @app.get("/api/projects/{pid}", dependencies=[Depends(auth)])
 def get_project(pid: str, request: Request):
     p = DB.get("projects", pid)
@@ -351,10 +415,14 @@ def get_project(pid: str, request: Request):
         "latest_work": work_info,
         "resume_hint": f"当前状态：{p['status']}",
     }
+
+
 class ScriptGenReq(BaseModel):
     version: int = Field(default=1, ge=1, le=99)
     # 只写第几集：留空=按项目目标集数整批写；给值=只写这一集（逐集推进，省 token）
     episode_index: int | None = Field(default=None, ge=1, le=99)
+
+
 def _target_episode_count(p: dict) -> int:
     """项目目标集数（建项目时按用户想法解析的，不写死 3）。"""
     try:
@@ -362,6 +430,8 @@ def _target_episode_count(p: dict) -> int:
     except (TypeError, ValueError):
         n = 1
     return n if n > 0 else 1
+
+
 def _episode_index_error(p: dict, episode_index: int | None) -> str | None:
     """要写的集超出目标集数时给出明确原因（空串=允许）。"""
     if not episode_index:
@@ -370,6 +440,8 @@ def _episode_index_error(p: dict, episode_index: int | None) -> str | None:
     if episode_index > total:
         return f"这个项目一共 {total} 集，不能写第 {episode_index} 集。"
     return None
+
+
 @app.post("/api/projects/{pid}/script/generate", dependencies=[Depends(auth)])
 async def generate_script(pid: str, req: ScriptGenReq = ScriptGenReq()):
     """用已配置的文本模型真实生成剧本；未配置则明确拒绝。"""
@@ -390,9 +462,12 @@ async def generate_script(pid: str, req: ScriptGenReq = ScriptGenReq()):
         message = "厂商额度或频率限制，暂时无法生成" if is_quota else raw
         hint = "等额度恢复或升级套餐；这不是模型配置问题" if is_quota else "到设置里配置文本模型并测试连接"
         raise HTTPException(400, {"code": exc.code, "message": message, "hint": hint})
+
+
 @app.post("/api/projects/{pid}/script/generate/stream", dependencies=[Depends(auth)])
 async def generate_script_stream(pid: str, req: ScriptGenReq = ScriptGenReq()):
     """流式生成剧本：SSE 推 token / done / error 三类事件。
+
     模型调用情况逐块可见；done 事件携带落库后的完整剧本；失败如实推 error。
     与对话 SSE 一致，token 由 fetch 读取（header 带令牌，不走 query）。
     """
@@ -400,6 +475,7 @@ async def generate_script_stream(pid: str, req: ScriptGenReq = ScriptGenReq()):
     if not p:
         raise HTTPException(404, "项目不存在")
     ensure_providers("text")
+
     async def events():
         yield "event: stage\ndata: " + json.dumps({"text": "已连接文本模型，正在生成剧本（若厂商限流会自动重试，请稍候）…"}, ensure_ascii=False) + "\n\n"
         bad = _episode_index_error(p, req.episode_index)
@@ -461,10 +537,15 @@ async def generate_script_stream(pid: str, req: ScriptGenReq = ScriptGenReq()):
                     "hint": "到设置里检查文本模型",
                 }
             yield "event: error\ndata: " + json.dumps(err, ensure_ascii=False) + "\n\n"
+
     return StreamingResponse(events(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 class CharactersGenReq(BaseModel):
     count: int = Field(default=5, ge=1, le=20)
+
+
 @app.post("/api/projects/{pid}/characters/generate", dependencies=[Depends(auth)])
 async def generate_characters(pid: str, request: Request, req: CharactersGenReq = CharactersGenReq()):
     """用已配置的图片模型真实生成定妆图；未配置则明确拒绝。"""
@@ -486,8 +567,12 @@ async def generate_characters(pid: str, request: Request, req: CharactersGenReq 
         return {"items": chars}
     except NoProviderError as exc:
         raise HTTPException(400, {"code": exc.code, "message": str(exc), "hint": "到设置里配置图片模型并测试连接"})
+
+
 class ShotsGenReq(BaseModel):
     shot_count: int = Field(default=12, ge=1, le=60)
+
+
 @app.post("/api/projects/{pid}/shots/generate", dependencies=[Depends(auth)])
 async def generate_shots(pid: str, req: ShotsGenReq = ShotsGenReq()):
     """用已配置的文本模型真实拆分镜头；未配置剧本时先生成剧本。"""
@@ -501,17 +586,24 @@ async def generate_shots(pid: str, req: ShotsGenReq = ShotsGenReq()):
         return await CONTENT.generate_shots(pid, req.shot_count)
     except NoProviderError as exc:
         raise HTTPException(400, {"code": exc.code, "message": str(exc), "hint": "到设置里配置文本模型并测试连接"})
+
+
 # ── 分镜单独编辑 ──────────────────────────────────────────────────────
 # 用户要能单独改某一镜的描述、调整重要度、增删镜头。
 # 关键：镜头有稳定的 key（与序号解耦），编辑/重排/删除后，
 # 素材与镜头的关联依然指向"这一镜"，不会串台。
+
 class ShotEditReq(BaseModel):
     scene: str | None = Field(default=None, max_length=800)
     importance: str | None = Field(default=None, pattern="^(key|transition)$")
     idx: int | None = Field(default=None, ge=1, le=999)   # 移到第几位
+
+
 class ShotAddReq(BaseModel):
     scene: str = Field(min_length=1, max_length=800)
     importance: str = Field(default="transition", pattern="^(key|transition)$")
+
+
 def _load_shot_plan(pid: str) -> list[dict]:
     """读项目的分镜表，规范化成 [{key, idx, scene, importance}]。"""
     p = DB.get("projects", pid) or {}
@@ -535,12 +627,16 @@ def _load_shot_plan(pid: str) -> list[dict]:
             "importance": s.get("importance") if s.get("importance") in ("key", "transition") else "transition",
         })
     return out
+
+
 def _shot_rows_of(pid: str) -> list[dict]:
     """该项目的镜头行（shots 表），用于删除素材与同步。"""
     return DB.list(
         "SELECT s.* FROM shots s JOIN episodes e ON e.id = s.episode_id WHERE e.project_id=?",
         (pid,),
     )
+
+
 def _drop_shot_media(pid: str, shot_key: str) -> int:
     """删掉某一镜的素材（记录 + 本机文件）。删镜头时必须先删素材，
     否则 assets.shot_id 的外键会让 shots 行删不掉。"""
@@ -563,6 +659,8 @@ def _drop_shot_media(pid: str, shot_key: str) -> int:
         except Exception:  # noqa: BLE001
             pass
     return n
+
+
 def _sync_shot_table(pid: str, plan: list[dict]) -> None:
     """把分镜表同步进 shots 表（生成时的镜头行、素材外键都指向这里）。"""
     try:
@@ -596,6 +694,8 @@ def _sync_shot_table(pid: str, plan: list[dict]) -> None:
                     pass
     except Exception as exc:  # noqa: BLE001 - shots 表同步失败不该阻断编辑
         print(f"[shots] 同步失败：{exc}")
+
+
 def _save_shot_plan(pid: str, plan: list[dict]) -> dict:
     """保存分镜表（projects.shots_json 是权威）+ 同步 shots 表。"""
     for i, s in enumerate(plan):
@@ -607,8 +707,11 @@ def _save_shot_plan(pid: str, plan: list[dict]) -> dict:
     )
     _sync_shot_table(pid, plan)
     return payload
+
+
 def _stale_shots(pid: str, keys: list[str]) -> list[str]:
     """哪些镜头已经有画面了（改了描述就需要重新生成才会生效）。
+
     老项目的素材没写 shot_id（历史数据），这时按镜头在分镜表里的位置
     兜底匹配 —— 否则改完描述却提示"不用重生成"，用户会以为已经生效。
     """
@@ -639,6 +742,8 @@ def _stale_shots(pid: str, keys: list[str]) -> list[str]:
         if pos is not None and pos < len(loose):
             out.append(k)
     return out
+
+
 def _mark_shot_edited(pid: str, shot_key: str) -> None:
     """镜头描述改了但画面还是旧的 → 标记为待重生成（shots.status='edited'）。"""
     try:
@@ -648,6 +753,8 @@ def _mark_shot_edited(pid: str, shot_key: str) -> None:
         )
     except Exception:  # noqa: BLE001
         pass
+
+
 @app.put("/api/projects/{pid}/shots/{shot_key}", dependencies=[Depends(auth)])
 def update_shot(pid: str, shot_key: str, req: ShotEditReq):
     """单独编辑某一镜：改场景描述、改重要度、调整顺序。"""
@@ -658,6 +765,7 @@ def update_shot(pid: str, shot_key: str, req: ShotEditReq):
     target = next((s for s in plan if s["key"] == shot_key), None)
     if not target:
         raise HTTPException(404, {"code": "E4009", "message": "找不到这个镜头", "hint": "分镜表可能已经变了，刷新一下再试"})
+
     changed = False
     if req.scene is not None:
         scene = req.scene.strip()
@@ -673,6 +781,7 @@ def update_shot(pid: str, shot_key: str, req: ShotEditReq):
         plan.remove(target)
         plan.insert(max(0, min(req.idx - 1, len(plan))), target)
         changed = True
+
     if changed:
         payload = _save_shot_plan(pid, plan)
         stale = _stale_shots(pid, [shot_key])
@@ -689,6 +798,8 @@ def update_shot(pid: str, shot_key: str, req: ShotEditReq):
         # 已经有画面的镜头改了描述：必须重新生成这一镜才会生效
         "stale_shots": stale,
     }
+
+
 @app.post("/api/projects/{pid}/shots", dependencies=[Depends(auth)])
 def add_shot(pid: str, req: ShotAddReq):
     """新增一个镜头（追加到末尾）。"""
@@ -706,6 +817,8 @@ def add_shot(pid: str, req: ShotAddReq):
     })
     payload = _save_shot_plan(pid, plan)
     return {"ok": True, "shots": payload["shots"], "key": plan[-1]["key"]}
+
+
 @app.delete("/api/projects/{pid}/shots/{shot_key}", dependencies=[Depends(auth)])
 def delete_shot(pid: str, shot_key: str):
     """删掉一个镜头（连同它已生成的画面）。"""
@@ -720,6 +833,8 @@ def delete_shot(pid: str, shot_key: str):
     _drop_shot_media(pid, shot_key)
     payload = _save_shot_plan(pid, plan)
     return {"ok": True, "shots": payload["shots"], "removed": shot_key}
+
+
 @app.post("/api/projects/{pid}/steps/{step}/advance", dependencies=[Depends(auth)])
 def advance(pid: str, step: int, req: AdvanceReq):
     p = DB.get("projects", pid)
@@ -751,12 +866,18 @@ def advance(pid: str, step: int, req: AdvanceReq):
         except Exception:  # noqa: BLE001 - 锁定失败不阻断流程推进
             pass
     return {"project_status": nxt, "effects": list(effects)}
+
+
 class ChatReq(BaseModel):
     project_id: str | None = None
     message: str = Field(min_length=1, max_length=2000)
+
+
 class DecideReq(BaseModel):
     action: str = Field(pattern="^(approve|reject)$")
     payload: dict = Field(default_factory=dict)
+
+
 # 每个动作的"我现在做什么"话术（不花钱、直接执行的动作用）
 _ACTION_REPLY = {
     "gen_script": "好，我现在用你配置的文本模型写剧本。",
@@ -768,19 +889,27 @@ _ACTION_REPLY = {
     "gen_video": "好，我现在按镜头生成画面。",
     "export_video": "好，我现在合成竖屏成片。",
 }
+
+
 def _action_reply(op: str) -> str:
     return _ACTION_REPLY.get(op, "好，我这就做。")
+
+
 @app.post("/api/chat", dependencies=[Depends(auth)])
 async def chat(req: ChatReq):
     """对话（JSON 版）：返回结构意图（intent），不执行写操作。"""
     intent = await AGENT.rewrite(req.message, req.project_id)
     return {"intent": intent.to_dict()}
+
+
 # 每个业务状态对应的"确认节点"：状态 → (advance 的 step 号, 这一步叫什么, 下一步是什么)
 _CONFIRM_TARGET = {
     "CP1_PENDING": (2, "剧本", "定角色"),
     "CP2_PENDING": (4, "角色形象", "拆镜头"),
     "CP3_PENDING": (7, "这一版画面", "导出成片"),
 }
+
+
 def _confirm_step_reply(project_id: str | None) -> str:
     """确认类回复：说清楚要确认的是哪一步。"""
     if not project_id:
@@ -793,8 +922,11 @@ def _confirm_step_reply(project_id: str | None) -> str:
         return "现在没有需要你确认的步骤，直接说要做什么就行。"
     _step, label, nxt = target
     return f"好，确认{label}，下一步：{nxt}。"
+
+
 def _write_next_episode_reply(project_id: str | None, episode_index: int | None = None) -> str:
     """续写类回复：说清楚要写第几集。
+
     用户点名了"第 N 集"就按 N 回答（哪怕超出总集数，也要说清写不了），
     没说才按"下一集"算。
     """
@@ -816,12 +948,16 @@ def _write_next_episode_reply(project_id: str | None, episode_index: int | None 
     if want <= written:
         return f"第 {want} 集已经写过了（目前写了 {written} 集）。想改写可以说「重新生成这一稿」。"
     return f"好，接着写第 {want} 集（共 {total} 集）。"
+
+
 @app.post("/api/chat/stream", dependencies=[Depends(auth)])
 async def chat_stream(req: ChatReq):
     """对话（SSE 版，设计 §6.5）：token / intent / done 三事件。
+
     Never 层：只推 intent，绝不执行写操作；用户确认后由前端调业务接口。
     """
     intent = await AGENT.rewrite(req.message, req.project_id)
+
     async def events():
         # 问答类（如"你好""这剧讲啥"）没有可执行动作，不该弹确认条；
         # 给一句人话回答，并标记 needs_confirm=False，前端就不显示"确认执行"。
@@ -846,17 +982,26 @@ async def chat_stream(req: ChatReq):
         payload["needs_confirm"] = needs_confirm
         yield f"event: intent\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
         yield f"event: done\ndata: {json.dumps({'history_cursor': ulid()}, ensure_ascii=False)}\n\n"
+
     return StreamingResponse(events(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.post("/api/agent/execute", dependencies=[Depends(auth)])
 def agent_execute(intent: Intent):
     return AGENT.execute(intent)
+
+
 @app.get("/api/checkpoints/recover", dependencies=[Depends(auth)])
 def checkpoints_recover():
     return {"pending": CHECKPOINTS.recover()}
+
+
 @app.get("/api/projects/{pid}/checkpoints", dependencies=[Depends(auth)])
 def project_checkpoints(pid: str):
     return {"pending": CHECKPOINTS.pending_for(pid)}
+
+
 @app.post("/api/checkpoints/{cp_id}/decide", dependencies=[Depends(auth)])
 def checkpoint_decide(cp_id: str, req: DecideReq):
     try:
@@ -864,11 +1009,15 @@ def checkpoint_decide(cp_id: str, req: DecideReq):
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return {"decided": req.action, "resume_payload": snapshot}
+
+
 class ExportReq(BaseModel):
     ratio: str = Field(pattern="^(9:16|16:9)$")
     with_subtitle: bool = True
     ai_badge: bool = True   # 服务端恒置 true，传 false 被忽略（Never 层）
     source_path: str | None = None  # W4：测试用本地素材路径；生产由镜头产物拼接
+
+
 @app.post("/api/projects/{pid}/export", dependencies=[Depends(auth)])
 async def export_project(pid: str, req: ExportReq, request: Request = None):
     p = DB.get("projects", pid)
@@ -948,10 +1097,14 @@ async def export_project(pid: str, req: ExportReq, request: Request = None):
     out["preview_url"] = f"/api/works/{result['work_id']}/preview?token={LOCAL_TOKEN}"
     out["format"] = result.get("format") or ("frames" if result.get("needs_ffmpeg") else "mp4")
     return out
+
+
 @app.get("/api/calls", dependencies=[Depends(auth)])
 def list_calls(limit: int = 60):
     """最近的模型调用记录：让模型调用不再是黑盒。"""
     return {"items": call_log.recent(limit)}
+
+
 @app.get("/api/assets/{asset_id}/file")
 def asset_file(asset_id: str, token: str | None = None):
     """素材只读文件端点：第 3/6/7 步要用 <img src> / <video src> 展示真实画面，
@@ -978,6 +1131,8 @@ def asset_file(asset_id: str, token: str | None = None):
         ".webp": "image/webp", ".gif": "image/gif",
     }.get(suffix, "application/octet-stream")
     return FileResponse(p, media_type=media_type, headers={"Accept-Ranges": "bytes"})
+
+
 @app.get("/api/works", dependencies=[Depends(auth)])
 def list_works():
     """作品库：带上项目名与集数，用户才认得出这是哪部剧的哪一集。"""
@@ -998,9 +1153,12 @@ def list_works():
         it["exists"] = path.exists()
         it["download_url"] = f"/api/works/{it['id']}/download?token={LOCAL_TOKEN}"
     return {"items": items}
+
+
 @app.get("/api/works/{work_id}/download")
 def download_work(work_id: str, token: str | None = None):
     """下载成片。
+
     <a download> 不能带自定义请求头，所以这里用查询参数校验本地令牌。
     """
     if token != LOCAL_TOKEN:
@@ -1022,9 +1180,12 @@ def download_work(work_id: str, token: str | None = None):
                         zf.write(f, f.name)
         return FileResponse(zip_path, media_type="application/zip", filename=f"{path.name}.zip")
     return FileResponse(path, media_type="video/mp4", filename=path.name)
+
+
 @app.get("/api/works/{work_id}/preview")
 def preview_work(work_id: str, token: str | None = None, request: Request = None):
     """成片在线预览：<video> 直接播，不用先下载到本地。
+
     必须支持 Range 请求，否则浏览器只能从头播、拖不动进度条。
     """
     if token != LOCAL_TOKEN:
@@ -1049,6 +1210,7 @@ def preview_work(work_id: str, token: str | None = None, request: Request = None
         start = max(0, min(start, size - 1))
         end = max(start, min(end, size - 1))
         length = end - start + 1
+
         def iter_range():
             with path.open("rb") as f:
                 f.seek(start)
@@ -1059,6 +1221,7 @@ def preview_work(work_id: str, token: str | None = None, request: Request = None
                         break
                     left -= len(chunk)
                     yield chunk
+
         return StreamingResponse(
             iter_range(), status_code=206, media_type=media_type,
             headers={
@@ -1068,6 +1231,8 @@ def preview_work(work_id: str, token: str | None = None, request: Request = None
             },
         )
     return FileResponse(path, media_type=media_type, headers={"Accept-Ranges": "bytes"})
+
+
 @app.get("/api/works/{work_id}/caption", dependencies=[Depends(auth)])
 def work_caption(work_id: str, body: str = ""):
     work = DB.get("assets", work_id)
@@ -1076,6 +1241,8 @@ def work_caption(work_id: str, body: str = ""):
     p = DB.get("projects", work["project_id"])
     name = p["name"] if p else "未命名项目"
     return {"caption": PUBLISH.caption(name, 1, body), "cached": False}
+
+
 @app.get("/api/system/capabilities", dependencies=[Depends(auth)])
 def system_capabilities():
     """本机能力自检：导出成片需要 ffmpeg，没有要提前告诉用户。"""
@@ -1091,12 +1258,17 @@ def system_capabilities():
             "装好后会自动识别；如果已安装，可在系统环境变量 WHALESHARK_FFMPEG 里指定 ffmpeg.exe 的完整路径。"
         ),
     }
+
+
 @app.get("/api/model-configs", dependencies=[Depends(auth)])
 def model_configs():
     return {"slots": {s: _public_slot(s) for s in SLOTS}}
+
+
 @app.put("/api/model-configs/{slot}", dependencies=[Depends(auth)])
 def save_model_config(slot: str, req: SaveModelReq):
     """保存真实 API 配置。凭证加密入库，此后任何接口不回显明文。
+
     保存后状态为 unverified——必须再点「测试连接」且真实探测通过，
     该槽位才可用于生成。杜绝"填了假地址也能跑"的演示行为。
     """
@@ -1111,6 +1283,7 @@ def save_model_config(slot: str, req: SaveModelReq):
         if req.source == "owned" and not req.credential and not has_prev_key:
             raise HTTPException(400, "这个来源需要填写 API 密钥")
         cipher = encrypt(req.credential) if req.credential else (prev["credential_cipher"] if has_prev_key else None)
+
         # 配置实质未变（地址/模型/来源/密钥都相同）时，直接沿用原 verified，
         # 不再新建 unverified 行——否则用户仅重开设置页点保存，就把已测通的能力清成不可用。
         unchanged = bool(
@@ -1142,9 +1315,12 @@ def save_model_config(slot: str, req: SaveModelReq):
             )
     refresh_providers()
     return {"saved": True, "slot": _public_slot(slot)}
+
+
 @app.post("/api/model-configs/{slot}/test", dependencies=[Depends(auth)])
 async def test_model_config(slot: str):
     """真实连接测试：GET {endpoint}/models。通过才置 verified=1 并允许生成。
+
     未配置 → 明确失败（引导用户先填地址），绝不返回 mock 可用。
     """
     if slot not in SLOTS:
@@ -1157,12 +1333,14 @@ async def test_model_config(slot: str):
     row = dict(row) if row else None
     if not row or not row.get("endpoint"):
         return {"ok": False, "verified": False, "error": "请先填写服务地址并保存", "mock": False}
+
     key = ""
     if row.get("credential_cipher"):
         try:
             key = decrypt(bytes(row["credential_cipher"]))
         except Exception:  # noqa: BLE001
             return {"ok": False, "verified": False, "error": "密钥无法解密，请重新填写", "mock": False}
+
     provider = ConfiguredProvider(
         provider_id=f"test_{slot}", source=row["source"], abilities=(slot,),
         endpoint=row["endpoint"], api_key=key, model=row.get("model") or "",
@@ -1187,6 +1365,8 @@ async def test_model_config(slot: str):
             "abilities": list(result.abilities), "price_hint": result.price_hint,
             "error": error, "warning": result.warning, "mock": False,
             "models": list(result.models)[:20]}
+
+
 @app.get("/api/capabilities", dependencies=[Depends(auth)])
 def capabilities():
     """各能力槽的就绪状态，供前端在生成前明确提示未配置项。"""
@@ -1196,15 +1376,21 @@ def capabilities():
         "ready": ready,
         "all_ready": all(ready.values()),
     }
+
+
 class GenStartReq(BaseModel):
     shot_count: int = Field(default=12, ge=1, le=60)
     ability: str = Field(default="image", pattern="^(image|video)$")
+
+
 @app.post("/api/projects/{pid}/generation/start", dependencies=[Depends(auth)])
 async def generation_start(pid: str, req: GenStartReq = GenStartReq()):
     """设计 §6.4：开始生成批次。
+
     能力选择：第 6 步「生成画面」默认走 image 能力（图片模型），
     这与界面语义一致，也让只配了文字+图片模型的用户能把流程走完；
     显式指定 video 时才走视频模型。
+
     纯开源版没有平台额度：生成全部走你自己配置的厂商账号，
     这里只做成本预估返回，不做任何余额拦截。
     """
@@ -1247,20 +1433,28 @@ async def generation_start(pid: str, req: GenStartReq = GenStartReq()):
         ),
         "billing": "own_key",
     }
+
+
 PRICE_PER_SHOT_ESTIMATE = PRICE_PER_SHOT
 # PRICE_PER_IMAGE 从 workflow.generation 导入（唯一来源，避免两处价格不一致）
+
+
 @app.post("/api/projects/{pid}/generation/pause", dependencies=[Depends(auth)])
 async def generation_pause(pid: str):
     r = await GENERATIONS.pause(pid)
     if r is None:
         raise HTTPException(404, "没有进行中的生成批次")
     return {"paused": True, "done": r["done"], "total": r["total"]}
+
+
 @app.post("/api/projects/{pid}/generation/resume", dependencies=[Depends(auth)])
 async def generation_resume(pid: str):
     r = await GENERATIONS.resume(pid)
     if r is None:
         raise HTTPException(404, "没有可恢复的生成批次")
     return {"resumed": True, "done": r["done"], "total": r["total"]}
+
+
 @app.get("/api/projects/{pid}/generation/progress", dependencies=[Depends(auth)])
 async def generation_progress(pid: str):
     """进度是引擎事实；前端只渲染，不做业务判断。"""
@@ -1299,23 +1493,30 @@ async def generation_progress(pid: str):
             it["asset_id"] = aid
         it["media_url"] = _asset_file_url(aid)
     return r
+
+
 def _asset_file_url(asset_id: str | None) -> str | None:
     """本机素材的可访问地址（永久有效，不会像厂商链接那样过期）。"""
     if not asset_id:
         return None
     return f"/api/assets/{asset_id}/file?token={LOCAL_TOKEN}"
+
+
 @app.get("/api/projects/{pid}/shots/media", dependencies=[Depends(auth)])
 def project_shots_media(pid: str):
     """项目的镜头素材清单（从数据库读，引擎重启后依然在）。
+
     为什么要有这个端点：生成批次只存在于内存里，引擎一重启
     progress 就变成"未开始"，第 6/7 步会变成一片空白 —— 用户明明
     已经生成好 12 张画面，却什么都看不到。素材本身已经落库，
     这里把它按镜头顺序还原出来，界面永远能看到真实产物。
+
     返回：[{shot_id, idx, scene_desc, status, media_url, kind, ability}]
     """
     p = DB.get("projects", pid)
     if not p or p.get("deleted_at"):
         raise HTTPException(404, "项目不存在或已被清理")
+
     # 1) 镜头素材：优先用精确的 shot_id 关联，老数据按生成顺序兜底
     rows = DB.list(
         "SELECT id, kind, shot_id, local_path, size_bytes FROM assets "
@@ -1333,6 +1534,7 @@ def project_shots_media(pid: str):
             by_shot[short] = r
         else:
             loose.append(r)
+
     # 2) 镜头清单：优先用分镜表（用户可编辑，含稳定 key），其次 shots 表
     plan = _load_shot_plan(pid)
     shots_meta: list[dict] = []
@@ -1365,6 +1567,7 @@ def project_shots_media(pid: str):
         st = row_status.get(db_shot_id(pid, m["shot_id"]))
         if st == "edited":
             m["status"] = "edited"
+
     items: list[dict] = []
     used_ids: set[str] = set()
     for i, m in enumerate(shots_meta):
@@ -1386,6 +1589,7 @@ def project_shots_media(pid: str):
             "kind": ("video" if asset["kind"] == "video" else "image") if asset else "image",
             "size_bytes": asset["size_bytes"] if asset else 0,
         })
+
     # 3) 兜底：有素材但镜头表对不上（例如镜头数比素材少），把剩余素材补在后面
     for j, asset in enumerate(loose):
         if asset["id"] in used_ids:
@@ -1398,9 +1602,12 @@ def project_shots_media(pid: str):
             "size_bytes": asset["size_bytes"],
         })
     return {"items": items, "total": len(items)}
+
+
 @app.post("/api/projects/{pid}/shots/roles-lock", dependencies=[Depends(auth)])
 def lock_project_roles(pid: str):
     """确认角色形象：把选中的角色在库里标记为已锁定。
+
     以前"角色是否已确认"只存在前端内存里（project.locked），
     刷新页面就丢，导致右侧角色列表显示"待确认"、
     而中间卡片显示"已确认" —— 同一屏两套说法。锁定必须落到库里。
@@ -1416,6 +1623,8 @@ def lock_project_roles(pid: str):
     return {"locked": len(chars), "characters": DB.list(
         "SELECT id,name,locked FROM characters WHERE project_id=? ORDER BY id", (pid,)
     )}
+
+
 @app.get("/api/projects/{pid}/shots/roles-lock", dependencies=[Depends(auth)])
 def get_project_roles_lock(pid: str):
     """角色的锁定状态（引擎事实，前端不再自己猜）。"""
@@ -1426,11 +1635,16 @@ def get_project_roles_lock(pid: str):
         "locked": any(int(c.get("locked") or 0) for c in chars),
         "characters": chars,
     }
+
+
 class ShotRegenReq(BaseModel):
     ability: str | None = Field(default=None, pattern="^(image|video)$")
+
+
 @app.post("/api/projects/{pid}/shots/{shot_id}/regenerate", dependencies=[Depends(auth)])
 async def regenerate_shot(pid: str, shot_id: str, req: ShotRegenReq = ShotRegenReq()):
     """只重新生成这一个镜头。
+
     用户要的是"这张不满意，换一张"，不是整批 12 张重跑一遍（重跑一遍又烧一轮额度）。
     """
     p = DB.get("projects", pid)
@@ -1449,6 +1663,8 @@ async def regenerate_shot(pid: str, shot_id: str, req: ShotRegenReq = ShotRegenR
         })
     r["media_url"] = _asset_file_url(r.get("asset_id"))
     return r
+
+
 @app.post("/api/generation/submit", dependencies=[Depends(auth)])
 async def generation_submit(req: GenReq):
     """单镜头真实生成（走已配置的 Provider；未配置则明确拒绝）。"""

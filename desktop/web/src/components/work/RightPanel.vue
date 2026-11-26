@@ -4,6 +4,7 @@ import { useProjectStore } from '@/stores/project'
 import { useGenStore } from '@/stores/gen'
 import { useUiStore } from '@/stores/ui'
 import { useCallsStore } from '@/stores/calls'
+
 const project = useProjectStore()
 const gen = useGenStore()
 const ui = useUiStore()
@@ -15,16 +16,19 @@ const shotList = computed<any[]>(() => {
   const live = gen.visibleItems() as any[]
   return live.length ? live : ((gen.persisted || []) as any[])
 })
+
 function statusChip(s: string) {
   if (s === 'done') return { cls: 'c-ok', text: '可用' }
   if (s === 'running') return { cls: 'c-run', text: '生成中' }
   if (s === 'failed') return { cls: 'c-fail', text: '失败' }
   return { cls: 'c-wait', text: '排队' }
 }
+
 // 日志 tab：拉取引擎侧最近记录（覆盖图片/视频/镜头等所有能力）
 watch(tab, (t) => { if (t === 'calls') calls.load(80) })
 onMounted(() => { if (tab.value === 'calls') calls.load(80) })
 </script>
+
 <template>
   <aside class="right" aria-label="项目内容">
     <div class="rtabs">

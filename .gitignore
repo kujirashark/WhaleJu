@@ -4,42 +4,52 @@ node_modules/
 __pycache__/
 *.pyc
 .pytest_cache/
+
 # ===== 运行数据（用户数据/生成素材/成片，永不提交）=====
 engine/data/
 desktop/web/_*.png
+
 # ===== 构建产物（开发者自行 build）=====
 desktop/frontend/
 desktop/web/dist/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/schemas/
+
 # ===== 密钥与凭证（任何形式都不提交）=====
 .env
 .env.*
 *.key
 credentials*.json
+
 # ===== 临时/个人文件 =====
 .workbuddy/
 _shot.js
 *.log
 .DS_Store
 Thumbs.db
+
 # ===== 运营素材（抖音封面/视频工程，与软件本体无关）=====
 docs/make_cover*.py
 docs/*封面*.png
 docs/Vertical_*.png
 20261121/
+
 # ===== 旧验证截图（过程产物，README 截图进 docs/screenshots）=====
 docs/_验证-*.png
+
 # ===== 原型阶段产物 =====
 prototype/
+
 # ===== 临时测试脚本 =====
 desktop/_test_*.cjs
 desktop/_test_*.js
+
 # ===== 历史方案文档（只保留最新合订本与启动手册）=====
 docs/AI漫剧*.md
+
 # ===== 抖音宣传视频工程（含第三方音乐，与软件本体无关）=====
 remotion-videos/
 
-# ===== Tauri 构建资源（PyInstaller 产物）=====
+# ===== Tauri 打包资源（PyInstaller 产物）=====
 desktop/src-tauri/resources/
-build/
+.git-rewrite/

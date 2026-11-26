@@ -4,22 +4,26 @@ import { useRoute, useRouter } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
 import { useProjectStore } from '@/stores/project'
 import { engine } from '@/api/engine'
+
 const route = useRoute()
 const router = useRouter()
 const ui = useUiStore()
 const project = useProjectStore()
 const online = ref(false)
+
 const navItems = [
   { path: '/', label: '首页' },
   { path: '/p/current', label: '制作' },
   { path: '/works', label: '作品库' },
   { path: '/settings', label: '设置' },
 ]
+
 const crumb = computed(() => {
   if (route.name !== 'work') return ''
   const name = project.projects.find((p: any) => p.id === project.currentId)?.name
   return name ? `项目 / <b>${name}</b>` : ''
 })
+
 function go(path: string) {
   ui.closeAll()
   // 「制作」导航必须带上当前项目真实 ID，跳 /p/current 会让 currentId 丢失、
@@ -31,14 +35,17 @@ function go(path: string) {
   }
   router.push(path)
 }
+
 async function openFolder(kind: 'data' | 'works') {
   ui.userMenuOpen = false
   const dir = await engine.openFolder(kind)
   ui.toast(dir ? `已打开：${dir}` : (kind === 'data' ? '数据文件夹：文档 / 鲸鲨漫剧' : '成片保存在本机作品库文件夹'))
 }
+
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Escape') ui.closeAll()
 }
+
 onMounted(async () => {
   ui.applyTheme()
   await engine.init()
@@ -51,8 +58,10 @@ onMounted(async () => {
 })
 onUnmounted(() => window.removeEventListener('keydown', onKey))
 </script>
+
 <template>
   <h1 class="sr-only">鲸鲨漫剧制作台：人的一生，八步从剧本到导出</h1>
+
   <header class="topbar">
     <div class="brand" @click="go('/')" role="button" tabindex="0">
       <svg class="logo" width="27" height="23" viewBox="0 0 48 40" fill="none" aria-hidden="true">
@@ -82,7 +91,11 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
       </div>
     </div>
   </header>
+
   <router-view />
+
+
   <!-- 角色形象确认也走聊天窗口（见 stores/agent.ts 的 confirm_step），不再单独弹窗 -->
+
   <div class="toast" :class="{ show: !!ui.toastMsg }">{{ ui.toastMsg }}</div>
 </template>

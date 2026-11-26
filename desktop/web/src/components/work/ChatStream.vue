@@ -3,11 +3,13 @@ import { ref, nextTick, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useProjectStore } from '@/stores/project'
 import { useUiStore } from '@/stores/ui'
+
 const agent = useAgentStore()
 const project = useProjectStore()
 const ui = useUiStore()
 const msg = ref('')
 const logEl = ref<HTMLElement | null>(null)
+
 // 新消息到达后自动滚到底部，保证"发送后有反应"可见
 watch(() => agent.messages.length, () => {
   nextTick(() => { if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight })
@@ -20,17 +22,20 @@ watch(() => agent.streaming.length, () => {
 watch(() => agent.processText, () => {
   nextTick(() => { if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight })
 })
+
 async function send() {
   const v = msg.value.trim()
   if (!v) { ui.toast('直接说要做什么，比如：写剧本 / 确认剧本 / 拆镜头 / 生成画面'); return }
   msg.value = ''
   await agent.send(v, project.currentId)
 }
+
 async function confirm() {
   const text = await agent.confirm()
   ui.toast(text)
 }
 </script>
+
 <template>
   <div style="display:flex;flex-direction:column;border-top:1px solid var(--line);background:var(--bg2)">
     <!-- 意图确认条（Never 层：未确认不执行） -->
@@ -72,6 +77,7 @@ async function confirm() {
     </div>
   </div>
 </template>
+
 <style scoped>
 .chat-log{max-height:210px;overflow-y:auto;padding:8px 24px 0;display:flex;flex-direction:column;gap:6px}
 .chat-msg{display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.5}

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { engine } from '@/api/engine'
+
 /**
  * 模型设置槽位（去演示化）：
  * - 默认全部「未设置」，没有任何来源被假定可用。
@@ -15,6 +16,7 @@ export interface SlotDraft {
   model: string
   credential: string
 }
+
 export const useSettingsStore = defineStore('settings', () => {
   // 槽位来源选择：默认空字符串 = 未设置
   const slots = ref<Record<string, string>>({ text: '', image: '', video: '', speech: '' })
@@ -29,7 +31,9 @@ export const useSettingsStore = defineStore('settings', () => {
   const serverSlots = ref<Record<string, any>>({})
   const probeResults = ref<Record<string, string>>({})
   const probing = ref<Record<string, boolean>>({})
+
   const SOURCE_KIND: Record<string, SlotDraft['source']> = { key: 'owned', local: 'local' }
+
   /** 界面选项(key/local) → 引擎来源(owned/local)，必须同步进草稿，
    * 否则选了「本地」仍按 owned 提交，会误报需要密钥。 */
   function pick(slot: string, value: string) {
@@ -37,6 +41,7 @@ export const useSettingsStore = defineStore('settings', () => {
     const mapped = SOURCE_KIND[value]
     if (mapped) drafts.value[slot].source = mapped
   }
+
   /** 从引擎加载已保存配置（服务端是唯一事实源）。 */
   async function load() {
     const r = await engine.api<{ slots: Record<string, any> }>('/api/model-configs')
@@ -65,6 +70,7 @@ export const useSettingsStore = defineStore('settings', () => {
       }
     }
   }
+
   /** 保存当前槽位：endpoint + model 必填；密钥按来源要求。 */
   async function saveOne(slot: string): Promise<boolean> {
     const choice = slots.value[slot]
@@ -107,6 +113,7 @@ export const useSettingsStore = defineStore('settings', () => {
     }
     return !!r
   }
+
   /** 保存所有已选槽位。 */
   async function save(): Promise<number> {
     let saved = 0
@@ -116,6 +123,7 @@ export const useSettingsStore = defineStore('settings', () => {
     await load()
     return saved
   }
+
   /** 真实连接测试：通过才 verified=1，否则明确失败。 */
   async function test(slot: string): Promise<boolean> {
     probing.value[slot] = true
@@ -150,6 +158,7 @@ export const useSettingsStore = defineStore('settings', () => {
       probing.value[slot] = false
     }
   }
+
   return {
     slots, drafts, serverSlots, probeResults, probing,
     pick, load, save, saveOne, test,

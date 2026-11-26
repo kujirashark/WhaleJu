@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { engine } from '@/api/engine'
 import { useUiStore } from './ui'
 import { useCallsStore } from './calls'
+
 /** 项目与制作流程：状态、步骤、角色选择、生成/播放/导出。
  *  守卫在引擎，前端的 step 只用于界面呈现；所有内容来自引擎真实数据。 */
 export const useProjectStore = defineStore('project', () => {
@@ -45,6 +46,7 @@ export const useProjectStore = defineStore('project', () => {
   const assets = ref<any[]>([]) // 引擎里已产出的真实素材（画面/成片）
   /** 角色形象是否已确认 —— 引擎事实（characters.locked），不是前端自己猜的 */
   const rolesLocked = ref(false)
+
   /** 引擎状态 → 允许到达的最远步骤。前进必须按顺序，越界会被拦下。 */
   const STEP_MAX_BY_STATUS: Record<string, number> = {
     DRAFT: 0, CP1_PENDING: 1, CHARACT: 2, CP2_PENDING: 3,
@@ -57,6 +59,7 @@ export const useProjectStore = defineStore('project', () => {
     const byScript = script.value?.episodes?.length ? 1 : 0
     return Math.max(byStatus, byScript)
   })
+
   /** 素材可显示地址：引擎可能给绝对地址，也可能给 /api/... 相对地址。
    *  相对地址必须补上引擎基址，否则 <img src="/api/..."> 会指向前端源站 → 一片裂图。 */
   function assetUrl(u?: string | null): string {
@@ -64,6 +67,7 @@ export const useProjectStore = defineStore('project', () => {
     if (/^(https?:|data:|blob:)/i.test(u)) return u
     return `${engine.base}${u.startsWith('/') ? '' : '/'}${u}`
   }
+
   /** 流式生成剧本：读取 SSE 逐块更新 streamText，完成后落库结果写入 script。
    *  episodeIndex：只写第几集（逐集推进，省 token）；不传则按项目目标集数整批写。 */
   async function genScriptStream(version = 1, episodeIndex?: number | null): Promise<{ ok: boolean; error?: string }> {
@@ -160,6 +164,7 @@ export const useProjectStore = defineStore('project', () => {
   }
   let playTimer: ReturnType<typeof setInterval> | undefined
   let expTimer: ReturnType<typeof setInterval> | undefined
+
   function goto(i: number): boolean {
     const t = Math.max(0, Math.min(7, Number(i)))
     // 步骤门禁：不能跳过前面的确认直接跳到后面
@@ -171,6 +176,7 @@ export const useProjectStore = defineStore('project', () => {
     stepTouched = true
     return true
   }
+
   /** 业务节点确认：交给引擎状态机推进，并把最新状态与素材同步回来。 */
   async function confirmStep(stepNo: number, payload: Record<string, any> = {}): Promise<boolean> {
     if (!currentId.value) { useUiStore().toast('还没有当前项目'); return false }
@@ -186,6 +192,7 @@ export const useProjectStore = defineStore('project', () => {
     useUiStore().toast(engine.error || '这一步暂时无法确认')
     return false
   }
+
   /** 从引擎加载项目真实内容（剧本/分镜可能为 null = 尚未生成）。 */
   async function loadDetail() {
     if (!currentId.value) return
@@ -224,6 +231,7 @@ export const useProjectStore = defineStore('project', () => {
       if (!stepTouched || step.value > maxStep.value) step.value = maxStep.value
     }
   }
+
   /** 确认角色形象：锁定落库（引擎事实），刷新后仍然是"已确认"。
    *  幂等：已锁定时直接返回成功，不会因为重复确认而报错。 */
   async function lockRoles(): Promise<boolean> {
@@ -241,6 +249,7 @@ export const useProjectStore = defineStore('project', () => {
     useUiStore().toast(engine.error || '这一步暂时无法确认')
     return false
   }
+
   /** 真实生成定妆图（调用已配置图片模型）。 */
   async function genCharacters(count = 5): Promise<{ ok: boolean; error?: string }> {
     if (!currentId.value) return { ok: false, error: '没有当前项目' }
@@ -255,6 +264,7 @@ export const useProjectStore = defineStore('project', () => {
       return { ok: false, error: contentError.value }
     } finally { contentBusy.value = false }
   }
+
   /** 真实生成剧本（调用已配置文本模型；未配置时返回明确错误）。 */
   async function genScript(version = 1): Promise<{ ok: boolean; error?: string }> {
     if (!currentId.value) return { ok: false, error: '没有当前项目' }
@@ -269,6 +279,7 @@ export const useProjectStore = defineStore('project', () => {
       return { ok: false, error: contentError.value }
     } finally { contentBusy.value = false }
   }
+
   /** 真实拆分镜头。 */
   async function genShots(shotCount = 12): Promise<{ ok: boolean; error?: string }> {
     if (!currentId.value) return { ok: false, error: '没有当前项目' }
@@ -283,6 +294,7 @@ export const useProjectStore = defineStore('project', () => {
       return { ok: false, error: contentError.value }
     } finally { contentBusy.value = false }
   }
+
   /**
    * 单独编辑某一镜：改场景描述 / 改重要度 / 调整顺序。
    * 返回 stale_shots：这些镜头已经出过画面，改了描述要重新生成才生效。
@@ -300,6 +312,7 @@ export const useProjectStore = defineStore('project', () => {
     shots.value = { ...(shots.value || {}), shots: r.shots }
     return { ok: true, stale: r.stale_shots || [] }
   }
+
   /** 新增一个镜头（追加到末尾）。 */
   async function addShot(scene: string, importance = 'transition')
     : Promise<{ ok: boolean; error?: string }> {
@@ -311,6 +324,7 @@ export const useProjectStore = defineStore('project', () => {
     shots.value = { ...(shots.value || {}), shots: r.shots }
     return { ok: true }
   }
+
   /** 删掉一个镜头（连同它已生成的画面）。 */
   async function deleteShot(key: string): Promise<{ ok: boolean; error?: string }> {
     if (!currentId.value) return { ok: false, error: '没有当前项目' }
@@ -322,8 +336,10 @@ export const useProjectStore = defineStore('project', () => {
     shots.value = { ...(shots.value || {}), shots: r.shots }
     return { ok: true }
   }
+
   /** 最近一次创建的项目目标集数（引擎解析出来的，界面用它提示用户） */
   const createdEpisodeCount = ref(1)
+
   async function create(idea: string): Promise<boolean> {
     const r = await engine.api<{ id: string; episode_count?: number }>('/api/projects', {
       method: 'POST', body: { idea, template_id: 'life_3ep' },
@@ -346,10 +362,12 @@ export const useProjectStore = defineStore('project', () => {
     }
     return false
   }
+
   async function loadProjects() {
     const r = await engine.api<{ items: any[] }>('/api/projects')
     if (r?.items) projects.value = r.items
   }
+
   /** 软删项目：从列表移除，误删可恢复。删的是当前项目时清空选中态。 */
   async function remove(id: string): Promise<boolean> {
     const r = await engine.api(`/api/projects/${id}`, { method: 'DELETE' })
@@ -358,21 +376,25 @@ export const useProjectStore = defineStore('project', () => {
     await loadProjects()
     return true
   }
+
   async function loadTrash() {
     const r = await engine.api<{ items: any[] }>('/api/projects/trash/list')
     return r?.items || []
   }
+
   async function restore(id: string): Promise<boolean> {
     const r = await engine.api(`/api/projects/${id}/restore`, { method: 'POST' })
     if (!r) return false
     await loadProjects()
     return true
   }
+
   function toggleRole(k: string) {
     const s = new Set(selectedRoles.value)
     s.has(k) ? s.delete(k) : s.add(k)
     selectedRoles.value = s
   }
+
   function togglePlay() {
     if (player.value.playing) {
       player.value.playing = false
@@ -386,6 +408,7 @@ export const useProjectStore = defineStore('project', () => {
       if (player.value.pos >= 30) { player.value.pos = 30; player.value.playing = false; clearInterval(playTimer) }
     }, 120)
   }
+
   function startExport() {
     exp.value = { state: 'running', pct: 0 }
     clearInterval(expTimer)
@@ -397,6 +420,7 @@ export const useProjectStore = defineStore('project', () => {
       }
     }, 180)
   }
+
   /** 导出产物信息（真实结果，不是进度假动画）。 */
   async function exportWork(): Promise<any | null> {
     if (!currentId.value) return null
@@ -415,6 +439,7 @@ export const useProjectStore = defineStore('project', () => {
       throw e
     }
   }
+
   return {
     currentId, step, tab, scriptVer, selectedRoles, rolesLocked, ratio, player, exp, expResult, projects,
     detail, script, shots, characters, contentBusy, contentError, streamText, lastStream, streamStage, streamWait, partial,
