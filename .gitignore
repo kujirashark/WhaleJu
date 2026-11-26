@@ -35,3 +35,7 @@ prototype/
 # ===== 临时测试脚本 =====
 desktop/_test_*.cjs
 desktop/_test_*.js
+# ===== 历史方案文档（只保留最新合订本与启动手册）=====
+docs/AI漫剧*.md
+# ===== 抖音宣传视频工程（含第三方音乐，与软件本体无关）=====
+remotion-videos/
