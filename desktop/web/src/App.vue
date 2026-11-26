@@ -72,9 +72,9 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
       <button class="icobtn" @click="ui.toggleTheme()" :aria-label="ui.theme === 'dark' ? '切换浅色模式' : '切换深色模式'" v-html="ui.theme === 'dark'
         ? '<svg width=\'15\' height=\'15\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'1.7\' stroke-linecap=\'round\'><circle cx=\'12\' cy=\'12\' r=\'4\'/><path d=\'M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19\'/></svg>'
         : '<svg width=\'15\' height=\'15\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'1.7\' stroke-linecap=\'round\' stroke-linejoin=\'round\'><path d=\'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z\'/></svg>'"></button>
-      <button class="avatar" @click="ui.userMenuOpen = !ui.userMenuOpen" aria-label="账户菜单" aria-haspopup="true">林</button>
+      <button class="avatar" @click="ui.userMenuOpen = !ui.userMenuOpen" aria-label="账户菜单" aria-haspopup="true">K</button>
       <div class="usermenu" :class="{ open: ui.userMenuOpen }" role="menu">
-        <div class="um-hd">林 · 本地账户</div>
+        <div class="um-hd">kujirashark · 本地账户</div>
         <button class="um-it" role="menuitem" @click="openFolder('data')">打开本地数据文件夹</button>
         <button class="um-it" role="menuitem" @click="openFolder('works')">打开作品库文件夹</button>
         <button class="um-it" role="menuitem" @click="ui.userMenuOpen = false; ui.toast('缓存已清除，项目和密钥不受影响')">清除本机缓存</button>
