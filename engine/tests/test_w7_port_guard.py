@@ -34,9 +34,12 @@ def _occupy(port: int):
 
 
 def _run(port: int) -> subprocess.CompletedProcess:
+    # encoding 显式 UTF-8：run.py 的提示输出是 UTF-8，CI 英文 Windows 的
+    # locale 是 cp1252，不指定会让父进程解码失败、stdout 变 None。
     return subprocess.run(
         [str(PY), str(RUN_PY), "--port", str(port)],
-        capture_output=True, text=True, timeout=60, cwd=str(ROOT),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60, cwd=str(ROOT),
     )
 
 
