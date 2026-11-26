@@ -2,6 +2,7 @@
 # 🦈 WhaleJu · 鲸鲨漫剧
 **本地优先的开源 AI 漫剧生产流水线**
 **Local-first AI Motion-Comic Pipeline**
+🌐 作者个人网站：[www.kujirashark.cn](https://www.kujirashark.cn)
 一句话创意 → 剧本 → 分镜 → 角色 → 生图 → 生视频 → 配音 → 成片导出，全程在你自己的电脑上完成。
 `纯开源免费` `数据不出本机` `自带密钥直连厂商` `MIT License`
 ![首页](docs/screenshots/01-home.png)
