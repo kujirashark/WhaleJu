@@ -27,7 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:/n          ref: ${{ inputs.tag || github.ref }}
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Setup Python（引擎 + PyInstaller）
         uses: actions/setup-python@v5
