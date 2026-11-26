@@ -57,6 +57,10 @@ jobs:
           npm ci
           npm run build
 
+      - name: 安装桌面壳依赖（tauri CLI）
+        working-directory: desktop
+        run: npm ci
+
       - name: PyInstaller 打包引擎（sidecar）
         run: >
           .venv\Scripts\pyinstaller --noconfirm --clean
