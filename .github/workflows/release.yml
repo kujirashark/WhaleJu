@@ -4,12 +4,16 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 tag（如 v0.0.1）"
+        required: true
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -23,6 +27,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:/n          ref: ${{ inputs.tag || github.ref }}
 
       - name: Setup Python（引擎 + PyInstaller）
         uses: actions/setup-python@v5
@@ -77,8 +82,8 @@ jobs:
       - name: 上传构建产物到 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: WhaleJu ${{ github.ref_name }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: WhaleJu ${{ inputs.tag || github.ref_name }}
           draft: false
           prerelease: false
           files: |
