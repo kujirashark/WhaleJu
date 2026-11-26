@@ -101,7 +101,8 @@ def test_run_script_exists_and_is_executable_entry():
     assert RUN_PY.is_file(), "缺少 engine/run.py"
     r = subprocess.run(
         [str(PY), str(RUN_PY), "--help"],
-        capture_output=True, text=True, timeout=60, cwd=str(ROOT),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60, cwd=str(ROOT),
     )
     assert r.returncode == 0
     assert "--port" in (r.stdout or "")
