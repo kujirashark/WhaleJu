@@ -38,13 +38,24 @@ WhaleJu 是给**已经注册过即梦/可灵等模型账号、却没做出过一
 
 ## 🚀 快速开始
 
-### 环境要求
+### 方式一：下载安装包（推荐）
+
+前往 [Releases](https://github.com/kujirashark/WhaleJu/releases) 下载：
+
+| 平台 | 文件 |
+|---|---|
+| Windows x64 | `WhaleJu_0.0.1_x64-setup.exe`（NSIS）或 `.msi` |
+
+> 安装包内已捆绑本地引擎（PyInstaller sidecar），装完即用，无需自己配 Python 环境。
+> Windows 安装包暂未签名，SmartScreen 首次运行可能提示，点击「更多信息 → 仍要运行」。
+
+### 方式二：从源码运行
+
+#### 环境要求
 
 - Windows 10/11（macOS 理论可跑，未验证）
 - Python 3.11+、Node.js 18+、Rust（Tauri 构建）
 - 至少一家模型厂商的 API Key（文本模型必需；图片/视频/配音按需）
-
-### 从源码运行
 
 ```bash
 # 1. 引擎（Python FastAPI，127.0.0.1:7420）
