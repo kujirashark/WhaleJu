@@ -77,8 +77,8 @@ onMounted(() => { if (tab.value === 'calls') calls.load(80) })
         <div class="metric"><div class="l">失败（不计费）</div><div class="v">{{ gen.failed }}</div></div>
         <div class="metric"><div class="l">已发生费用（引擎记账）</div><div class="v">{{ money(realCost) }}</div></div>
         <div class="metric" style="border-bottom:none"><div class="l">失败花费</div><div class="v">0.0 元</div></div>
-        <div class="note">费用来自引擎的真实账单事件；自带密钥生成的成本按公开单价估算，不扣平台额度。</div>
-        <button class="btn btn-t" @click="ui.toast('额度与账单以本机账本为准')">查看账本说明</button>
+        <div class="note">用量来自引擎的真实账单事件；成本按厂商公开单价估算，仅作参考。</div>
+        <button class="btn btn-t" @click="ui.toast('用量与成本以本机账本为准')">查看账本说明</button>
       </template>
     </div>
   </aside>

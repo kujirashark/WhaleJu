@@ -2,7 +2,7 @@
 职责边界：
 - 引擎是唯一事实源：12 个镜头的 queued/running/done/failed 全部在此推进。
 - 前端只渲染 progress 返回值，不做任何业务判断。
-- 冻结/结算仍走 CreditLedger；失败自动退回冻结，用户不为废片付费。
+- 纯开源版不设平台额度：只用你自己的厂商账号，用量只记本地事件。
 - 去演示化：每个镜头真实调用已配置 Provider 的 submit→poll；异步视频按
   poll 返回的 pending 状态真实轮询（有上限），不再模拟失败、不再伪造进度。
 """
@@ -15,7 +15,6 @@ from typing import Any
 from ..adapters.base import GenResult
 from ..adapters.base import ImageGenRequest, VideoGenRequest
 from ..adapters.registry import ProviderRegistry
-from ..billing.ledger import CreditLedger, InsufficientCredits
 from ..storage.db import Database
 from ..storage.util import ulid, utc_now
 @dataclass
@@ -41,7 +40,6 @@ class Batch:
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     task: asyncio.Task | None = None
-    freeze_ids: dict[str, str] = field(default_factory=dict)
     # 致命原因：厂商根本不支持这个能力（如把图片模型填进视频槽）。
     # 一旦出现就立刻停批，不把 12 个镜头逐个撞一遍墙。
     fatal_reason: str | None = None
@@ -116,9 +114,8 @@ def _is_capability_error(reason: str) -> bool:
         "unsupported", "no_provider_configured",
     ))
 class GenerationManager:
-    def __init__(self, db: Database, ledger: CreditLedger, registry: ProviderRegistry, assets=None):
+    def __init__(self, db: Database, registry: ProviderRegistry, assets=None):
         self.db = db
-        self.ledger = ledger
         self.registry = registry
         # 素材落地仓库：厂商链接会过期，产物必须取回本机
         self.assets = assets
@@ -353,11 +350,9 @@ class GenerationManager:
         - 第 6 步「生成画面」用 image 能力（图片模型），这与界面语义一致，
           也让只配了文字+图片模型的用户能把流程走完；
         - 若项目已有视频素材能力（配了视频模型），可以按 video 能力生成视频镜头。
-        计费口径（与 schema 注释一致）：
-        - proxy（平台代采）→ 提交前冻结平台额度，成功结算、失败全额退回；
-        - owned（自带密钥）/ local（本机模型）→ **不消耗平台额度**，
-          用户直接用自己的厂商账号付费，这里只记用量事件。
-          过去无论来源都扣平台额度，导致用自己密钥的用户被假额度卡住。
+        计费口径（纯开源版）：
+        - 不存在平台额度概念，全部走你自己的厂商账号；
+        - 这里只在本地 usage_events 记一条用量与成本估算，供「用量统计」查看。
         """
         item.status = "running"
         ability = item.ability or "image"
@@ -376,18 +371,6 @@ class GenerationManager:
             item.fail_reason = "provider_missing"
             return False
         unit_price = price_for(ability)
-        consumes_credits = route.source == "proxy"
-        freeze_id = ""
-        if consumes_credits:
-            try:
-                freeze_id = self.ledger.freeze(unit_price, batch.project_id, route.provider_id, ability)
-            except InsufficientCredits as exc:
-                # 额度不足：明确失败，不要重试（重试也还是不够），更不要伪造画面
-                item.status = "failed"
-                item.fail_reason = str(exc)[:80] or "insufficient_credits"
-                item.auto_retry_left = 0
-                return False
-            batch.freeze_ids[item.shot_id] = freeze_id
         try:
             prompt = await self._prompt_for(batch.project_id, item.scene_desc)
             if ability == "image":
@@ -415,14 +398,12 @@ class GenerationManager:
             item.cost = result.raw_cost_estimate or unit_price
             item.status = "done"
             item.asset_ref = result.asset_ref
-            if freeze_id:
-                self.ledger.settle(freeze_id, item.cost, True)
             self.db.insert("usage_events", {
                 "id": ulid(), "ts": utc_now(), "project_id": batch.project_id,
                 "provider_id": route.provider_id, "source": route.source,
                 "ability": ability, "units": 1.0 if ability == "image" else 5.0,
-                # 自带密钥/本地模型：实扣平台积分恒为 0，只留成本估算
-                "credits_spent": item.cost if consumes_credits else 0.0,
+                # 纯开源版没有平台积分，credits_spent 恒为 0，只留成本估算
+                "credits_spent": 0.0,
                 "raw_cost_estimate": item.cost, "ok": 1,
             })
             # 素材落库：批次只存在于内存，刷新页面后第 7 步会看不到任何画面。
@@ -430,10 +411,8 @@ class GenerationManager:
             if item.asset_ref:
                 self._register_asset(batch.project_id, item)
             return True
-        except Exception as exc:  # noqa: BLE001 - 任何 Provider 异常都退回冻结
+        except Exception as exc:  # noqa: BLE001 - Provider 异常统一走失败/重试
             reason = str(exc)[:60] or "provider_error"
-            if freeze_id:
-                self.ledger.settle(freeze_id, 0, False, reason)
             # 厂商根本不支持这个能力（端点不存在 / 方法不允许）：
             # 立刻停批并说清楚原因，别把 12 个镜头逐个撞一遍墙还只给一句"失败"。
             if _is_capability_error(reason):

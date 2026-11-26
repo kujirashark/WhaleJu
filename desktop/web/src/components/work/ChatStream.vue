@@ -37,7 +37,7 @@ async function confirm() {
     <div v-if="agent.pendingIntent" class="intent-bar">
       <div class="ib-txt">
         <b>{{ agent.pendingIntent.confirm || '确认执行这一步？' }}</b>
-        <span v-if="agent.pendingIntent.cost_impact > 0" class="chip c-wait">约 {{ agent.pendingIntent.cost_impact.toFixed(0) }} 额度</span>
+        <span v-if="agent.pendingIntent.cost_impact > 0" class="chip c-wait">预计消耗厂商额度 {{ agent.pendingIntent.cost_impact.toFixed(0) }}</span>
       </div>
       <div class="ib-acts">
         <button class="btn btn-s" :disabled="agent.executing" @click="agent.cancel(); ui.toast('已取消，没有执行任何操作')">取消</button>

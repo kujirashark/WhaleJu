@@ -51,7 +51,7 @@ def test_schema_tables():
     with DB.read() as c:
         tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     for t in ("projects", "episodes", "characters", "shots", "generation_tasks",
-              "assets", "checkpoints", "usage_events", "model_configs", "credit_wallet", "agent_history"):
+              "assets", "checkpoints", "usage_events", "model_configs", "agent_history"):
         assert t in tables
 def test_api_auth_and_project_flow():
     client = TestClient(app)
@@ -75,15 +75,8 @@ def test_create_project_accepts_short_chinese_idea():
     assert r.json()["id"]
     # 1 个字仍然是明确的拒绝（422），不是静默通过
     assert client.post("/api/projects", json={"idea": "鲸"}, headers=HEADERS).status_code == 422
-def test_wallet_recharge():
-    client = TestClient(app)
-    before = client.get("/api/wallet", headers=HEADERS).json()["balance"]
-    r = client.post("/api/wallet/recharge", json={"plan_id": "p2"}, headers=HEADERS)
-    assert r.status_code == 200, r.text
-    after = client.get("/api/wallet", headers=HEADERS).json()["balance"]
-    assert after - before == pytest.approx(200.0)
 def test_generation_roundtrip_with_provider():
-    """有 Provider 时：submit→poll→冻结→结算全链路（测试显式注册 Mock）。"""
+    """有 Provider 时：submit→poll→落用量事件全链路（测试显式注册 Mock）。"""
     register_mock()
     client = TestClient(app)
     r = client.post("/api/generation/submit", json={
@@ -94,8 +87,7 @@ def test_generation_roundtrip_with_provider():
     assert body["ok"] is True
     assert body["task_id"].startswith("mt_")
     assert "route_reason" in body and body["route_reason"]
-    assert body["wallet"]["frozen"] == 0
-    assert body["wallet"]["balance"] < 86.4
+    assert body["billing"] == "own_key"
     with DB.read() as c:
         used = c.execute("SELECT COUNT(*) FROM usage_events WHERE ok=1").fetchone()[0]
     assert used >= 1
@@ -204,7 +196,7 @@ def test_model_test_404_hints_missing_v1(monkeypatch):
     monkeypatch.setattr(main_mod.ConfiguredProvider, "probe", fake_probe)
     client = TestClient(app)
     client.put("/api/model-configs/text", json={
-        "source": "proxy", "provider_kind": "openai_compat", "name": "stub",
+        "source": "owned", "provider_kind": "openai_compat", "name": "stub",
         "endpoint": "https://example.invalid", "model": "stub-model",
         "credential": "sk-test-1234567890",
     }, headers=HEADERS)
@@ -215,7 +207,7 @@ def test_model_test_404_hints_missing_v1(monkeypatch):
 def test_save_config_reuses_credential_when_blank():
     """只改地址/模型、密钥留空时沿用旧密文（改错地址不用重填密钥）。"""
     client = TestClient(app)
-    base = {"source": "proxy", "provider_kind": "openai_compat", "name": "stub",
+    base = {"source": "owned", "provider_kind": "openai_compat", "name": "stub",
             "model": "stub-model"}
     r = client.put("/api/model-configs/text", json={
         **base, "endpoint": "https://old.example/v1", "credential": "sk-reuse-1234567890",
@@ -383,20 +375,6 @@ def test_caption_has_locked_declaration():
     text = PUBLISH.caption("人的一生", 1, "测试正文")
     assert "AI 生成" in text
     assert "按平台要求标识" in text
-def test_gateway_idempotency_and_auth():
-    from fastapi.testclient import TestClient
-    from gateway.app import app as gw_app
-    c = TestClient(gw_app)
-    assert c.get("/v1/wallet").status_code == 401
-    h = {"Authorization": "Bearer dev-gateway-token"}
-    before = c.get("/v1/wallet", headers=h).json()["balance"]
-    body = {"request_id": "req_test_w4_001", "prompt": "测试提示词", "params": {"duration_s": 5}}
-    r1 = c.post("/v1/generate/video", json=body, headers=h)
-    r2 = c.post("/v1/generate/video", json=body, headers=h)
-    assert r1.status_code == 202 and r2.status_code == 202
-    assert r1.json()["task_id"] == r2.json()["task_id"]  # 幂等：同一任务
-    after = c.get("/v1/wallet", headers=h).json()["balance"]
-    assert before - after == pytest.approx(4.5)  # 只扣一次
 # ── W5：真实生成批次 + SSE ──────────────────────────────────
 def test_generation_batch_progress_and_pause():
     """批次进度是引擎事实：start → progress → pause → 进度不倒退。"""
@@ -404,7 +382,6 @@ def test_generation_batch_progress_and_pause():
     client = TestClient(app)
     pid = client.post("/api/projects", json={"idea": "批次进度测试用项目，三集竖屏短剧"},
                       headers=HEADERS).json()["id"]
-    client.post("/api/wallet/recharge", json={"plan_id": "p3"}, headers=HEADERS)  # 40 镜头需 360 额度
     r = client.post(f"/api/projects/{pid}/generation/start", json={"shot_count": 40}, headers=HEADERS)
     assert r.status_code == 200, r.text
     assert r.json()["queued"] == 40
@@ -455,17 +432,6 @@ async def test_batch_pause_freezes_progress():
     assert now["done"] == done_at_pause, "暂停后进度必须冻结"
     await GENERATIONS.resume(pid)
     batch.task.cancel()
-def test_generation_insufficient_credit():
-    """E2001：额度不足必须在提交前拒绝，不产生冻结。"""
-    from engine.app.main import LEDGER, PRICE_PER_SHOT_ESTIMATE
-    original = LEDGER.wallet()["balance"]
-    # 直接构造超大批次请求，远超余额
-    client = TestClient(app)
-    pid = client.post("/api/projects", json={"idea": "额度不足测试项目，三集竖屏短剧"},
-                      headers=HEADERS).json()["id"]
-    r = client.post(f"/api/projects/{pid}/generation/start", json={"shot_count": 60}, headers=HEADERS)
-    # 60*9=540，若余额不足应 400；余额足够则 200（两种都合法，只断言不会 500）
-    assert r.status_code in (200, 400)
 def test_chat_sse_three_events():
     """SSE 三事件流：token → intent → done，且 intent 带 confirm 字段。"""
     from engine.app.main import app as engine_app
@@ -554,7 +520,7 @@ def test_configured_provider_retries_on_429(monkeypatch):
     import engine.app.adapters.configured_provider as cp_mod
     monkeypatch.setattr(cp_mod.httpx, "Client", FakeClient)
     monkeypatch.setattr(cp_mod.time, "sleep", lambda _s: None)  # 不等真实 7 秒
-    p = ConfiguredProvider("t", "proxy", ("text",), "https://x.invalid/v1", api_key="k", model="m")
+    p = ConfiguredProvider("t", "owned", ("text",), "https://x.invalid/v1", api_key="k", model="m")
     status, data, err = p._post("/chat/completions", {"model": "m"})
     assert status == 200, err
     assert len(calls) == 2  # 第一次 429，第二次成功
@@ -580,7 +546,7 @@ def test_configured_provider_no_retry_on_401(monkeypatch):
             return FakeResp()
     monkeypatch.setattr(cp_mod.httpx, "Client", FakeClient)
     monkeypatch.setattr(cp_mod.time, "sleep", lambda _s: None)
-    p = ConfiguredProvider("t", "proxy", ("text",), "https://x.invalid/v1", api_key="bad", model="m")
+    p = ConfiguredProvider("t", "owned", ("text",), "https://x.invalid/v1", api_key="bad", model="m")
     status, data, err = p._post("/chat/completions", {})
     assert status == 401
     assert len(calls) == 1
@@ -713,7 +679,7 @@ def test_call_log_records_provider_calls(monkeypatch):
             return FakeResp(429, {"error": {"message": "rate limit"}})
     monkeypatch.setattr(cp_mod.httpx, "Client", FakeClient)
     monkeypatch.setattr(cp_mod.time, "sleep", lambda _s: None)
-    p = ConfiguredProvider("t", "proxy", ("text",), "https://x.invalid/v1", api_key="k", model="m")
+    p = ConfiguredProvider("t", "owned", ("text",), "https://x.invalid/v1", api_key="k", model="m")
     status, _data, _err = p._post("/chat/completions", {})
     assert status == 429
     items = call_log.recent(10)

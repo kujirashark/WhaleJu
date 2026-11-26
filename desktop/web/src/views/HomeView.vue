@@ -11,7 +11,7 @@ import ProjectList from '@/components/home/ProjectList.vue'
       </div>
       <IdeaBox />
       <ProjectList />
-      <p class="home-note">密钥和素材只存在你的电脑上，调用直接发给模型厂商。没有模型也能先用平台额度试做第一集。</p>
+      <p class="home-note">密钥和素材只存在你的电脑上，调用直接发给模型厂商。本软件免费开源，生成消耗的是你自己的厂商额度。</p>
     </div>
   </main>
 </template>

@@ -167,7 +167,7 @@ onMounted(async () => {
 const regenBusy = ref('')
 /**
  * 只重新生成这一个镜头。
- * 整批重跑等于白烧一轮额度；用户要的是"这张换一张"。
+ * 整批重跑等于白烧一轮厂商额度；用户要的是"这张换一张"。
  */
 async function regenShot(it: any) {
   const pid = project.currentId
@@ -567,14 +567,12 @@ function downloadWork() {
               在下方聊天框说「生成画面」，我就按这个方案开跑；说「重新拆镜头」我就重拆。
             </div>
             <div class="note">
-              预计生成 {{ shotPlan.length }} 张画面，每张 1.5 额度，共约
-              {{ Math.round(shotPlan.length * 1.5 * 10) / 10 }} 额度；
-              用你自己的 API 密钥则不消耗平台额度。生成失败不计费。
+              预计生成 {{ shotPlan.length }} 张画面，消耗的是你自己的厂商额度；
+              本软件免费开源，不做任何收费。
             </div>
             <div v-if="gen.lastError" class="hint-warn">
               <div><b>没能开始生成：</b>{{ gen.lastError }}</div>
               <div class="acts" style="margin-top:10px">
-                <button v-if="gen.lastErrorCode === 'E2001'" class="btn btn-p" @click="ui.payOpen = true">充值额度</button>
                 <button class="btn btn-s" @click="router.push('/settings')">去设置生成视频</button>
               </div>
               <div v-if="gen.lastErrorHint" style="margin-top:8px">{{ gen.lastErrorHint }}</div>
@@ -606,12 +604,12 @@ function downloadWork() {
           <p>{{ gen.total && done >= gen.total ? '镜头都好了，可以看成片。' : '生成进度全部来自本机引擎的真实任务状态。' }}</p>
           <p v-if="gen.total" style="font-size:12px;color:var(--ink3)">
             本批次用{{ gen.ability === 'video' ? '视频' : '图片' }}模型逐个镜头生成，
-            每镜 {{ gen.unitPrice }} 额度，共 {{ gen.estimatedCost }} 额度<template v-if="gen.billing === 'own_key'">（用你自己的密钥，不扣平台额度）</template>。
+            预计消耗你自己的厂商额度约 {{ gen.estimatedCost }} 单位（本软件免费，不做任何收费）。
           </p>
           <div class="progress"><i v-for="n in (gen.total || 12)" :key="n" :class="{ on: n <= done }"></i></div>
           <div style="display:flex;justify-content:space-between;align-items:baseline">
             <span class="big-num">{{ gen.total ? Math.round(done / gen.total * 100) : 0 }}%</span>
-            <span style="font-size:11px;color:var(--ink3);font-family:var(--mono)">已完成 {{ done }} 个 · 失败 {{ gen.failed }} 个（不计费）<template v-if="gen.eta"> · 约 {{ gen.eta }} 秒</template></span>
+            <span style="font-size:11px;color:var(--ink3);font-family:var(--mono)">已完成 {{ done }} 个 · 失败 {{ gen.failed }} 个（失败不消耗厂商额度）<template v-if="gen.eta"> · 约 {{ gen.eta }} 秒</template></span>
           </div>
           <!-- 镜头卡片：每个镜头都看得到真实画面（图片/视频），并能单独重生成。
                数据源是引擎的持久化素材（visibleItems），
@@ -655,13 +653,12 @@ function downloadWork() {
             <div class="acts" style="margin-top:10px">
               <button class="btn btn-p" @click="router.push('/settings')">去设置生成视频</button>
             </div>
-            <div style="margin-top:8px">剩下的镜头没有执行，也没有扣任何额度。</div>
+            <div style="margin-top:8px">剩下的镜头没有执行，也没有消耗任何厂商额度。</div>
           </div>
             <div v-if="gen.notStarted" class="hint-warn">还没有开始生成。在下方聊天框说「生成画面」我就开跑；这里只显示引擎的真实进度，没有演示动画。</div>
           <div v-if="gen.lastError" class="hint-warn">
             <div><b>生成没跑起来：</b>{{ gen.lastError }}</div>
             <div class="acts" style="margin-top:10px">
-              <button v-if="gen.lastErrorCode === 'E2001'" class="btn btn-p" @click="ui.payOpen = true">充值额度</button>
               <button class="btn btn-s" @click="router.push('/settings')">去设置生成视频</button>
             </div>
             <div v-if="gen.lastErrorHint" style="margin-top:8px">{{ gen.lastErrorHint }}</div>

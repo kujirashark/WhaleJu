@@ -35,7 +35,7 @@ async function create() {
       router.push(`/p/${project.currentId}`)
       const n = project.createdEpisodeCount || 1
       ui.toast(n > 1
-        ? `项目已保存到本机，按你说的 ${n} 集开工（一集一集写，省额度）`
+        ? `项目已保存到本机，按你说的 ${n} 集开工（一集一集写，省 token）`
         : '项目已保存到本机，开始写第一稿')
     } else {
       // 说清真实原因，并提示"可能已经建出来了" ——

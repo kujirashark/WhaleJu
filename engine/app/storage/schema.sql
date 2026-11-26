@@ -119,13 +119,6 @@ CREATE TABLE IF NOT EXISTS model_configs (
   updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_model_active ON model_configs(slot) WHERE is_active=1;
-CREATE TABLE IF NOT EXISTS credit_wallet (
-  id        INTEGER PRIMARY KEY CHECK (id=1),  -- 恒为 1：全库唯一钱包（单用户桌面）
-  balance   REAL NOT NULL DEFAULT 0,  -- 可用额度（本地缓存视图；网关 Redis 为准）
-  frozen    REAL NOT NULL DEFAULT 0,  -- 冻结额度（在途任务预估占用）
-  synced_at TEXT                      -- 最近一次与网关对齐时间
-);
-INSERT OR IGNORE INTO credit_wallet(id,balance,frozen) VALUES (1, 86.4, 0);
 CREATE TABLE IF NOT EXISTS agent_history (
   id          TEXT PRIMARY KEY,  -- 消息唯一标识（ULID）
   project_id  TEXT,              -- 关联项目（可空：全局闲聊）

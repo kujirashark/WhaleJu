@@ -5,7 +5,7 @@ export interface GenStartResult {
   ok: boolean
   error?: string
   hint?: string
-  code?: string          // 引擎错误码：E2001=额度不足 / E4001=没配模型
+  code?: string          // 引擎错误码：E4001=没配模型 等
   need?: number          // 需要的额度
   balance?: number       // 当前余额
 }
@@ -154,18 +154,11 @@ export const useGenStore = defineStore('gen', () => {
     // 引擎拒绝：显示真实原因（额度不足 / 没配模型 / 厂商限流……），
     // 绝不用「去配置模型」这种通用话术盖掉真实原因——那会让用户一直找错方向。
     const d = engine.lastError
-    lastError.value = engine.error || '生成被拒绝，请检查模型配置与额度'
+    lastError.value = engine.error || '生成被拒绝，请检查模型配置'
     lastErrorCode.value = d?.code || ''
     lastErrorHint.value = d?.hint || ''
     lastErrorNeed.value = d?.need ?? null
     lastErrorBalance.value = d?.balance ?? null
-    if (d?.code === 'E2001') {
-      return {
-        ok: false, error: lastError.value,
-        code: d.code, need: d.need, balance: d.balance,
-        hint: d.hint || '可以充值额度，或改成用你自己的 API 密钥（不消耗平台额度）',
-      }
-    }
     return { ok: false, error: lastError.value, code: d?.code, hint: d?.hint }
   }
   async function poll(projectId: string) {

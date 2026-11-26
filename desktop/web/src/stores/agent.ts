@@ -217,21 +217,13 @@ export const useAgentStore = defineStore('agent', () => {
     if (!intent) return '没有待确认的操作'
     const project = useProjectStore()
     const ui = useUiStore()
-    if (!project.currentId && !['route_to_recharge', 'route_to_settings'].includes(intent.op)) {
+    if (!project.currentId && intent.op !== 'route_to_settings') {
       pendingIntent.value = null
       const msg = '还没有选中的项目，请先到首页创建或打开一个项目'
       messages.value.push({ role: 'agent', text: msg, kind: 'say' })
       return msg
     }
-    if (intent.cost_impact > 0) {
-      const w = await engine.api<{ balance: number }>('/api/wallet')
-      if (w && w.balance < intent.cost_impact) {
-        pendingIntent.value = null
-        const msg = `额度不足（需要约 ${intent.cost_impact.toFixed(0)}），请先充值`
-        messages.value.push({ role: 'agent', text: msg, kind: 'say' })
-        return msg
-      }
-    }
+    // 纯开源版：生成走用户自己的厂商账号，本地不做余额拦截
     executing.value = true
     let msg = ''
     try {
@@ -405,10 +397,6 @@ export const useAgentStore = defineStore('agent', () => {
           msg = r.ok ? '定妆图已重新生成' : (r.error || '定妆图生成失败')
           break
         }
-        case 'route_to_recharge':
-          ui.payOpen = true
-          msg = '已打开充值窗口'
-          break
         case 'route_to_settings':
           window.location.hash = '#/settings'
           msg = '已打开设置'

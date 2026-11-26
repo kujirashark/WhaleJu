@@ -131,13 +131,12 @@ def test_project_detail_backfills_old_remote_refs(img_server):
     d = client.get(f"/api/projects/{pid}", headers=HEADERS).json()
     assert d["characters"][0]["ref_url"].startswith("http://testserver/api/assets/")
 # ---------- 按来源计费 ----------
-def test_own_key_generation_does_not_consume_platform_credits():
-    """自带密钥（owned）来源：不扣平台额度，只记录用量。"""
+def test_own_key_generation_records_usage_only():
+    """纯开源版：生成走自己的厂商账号，本地只记用量事件，无平台扣费。"""
     REGISTRY.register(_LocalVideoProvider(source="owned"))
     client = TestClient(app)
     pid = client.post("/api/projects", json={"idea": "自有密钥计费测试三集竖屏短剧"},
                       headers=HEADERS).json()["id"]
-    before = client.get("/api/wallet", headers=HEADERS).json()["balance"]
     r = client.post(f"/api/projects/{pid}/generation/start", json={"shot_count": 2, "ability": "video"}, headers=HEADERS)
     assert r.status_code == 200, r.text
     assert r.json()["billing"] == "own_key"
@@ -147,21 +146,11 @@ def test_own_key_generation_does_not_consume_platform_credits():
         if p and p.get("finished"):
             break
         time.sleep(0.1)
-    after = client.get("/api/wallet", headers=HEADERS).json()["balance"]
-    assert after == before, "自带密钥来源不应扣平台额度"
     with DB.read() as c:
         spent = c.execute("SELECT COALESCE(SUM(credits_spent),0) FROM usage_events").fetchone()[0]
-    assert spent == 0
-def test_own_key_passes_credit_gate_even_without_balance():
-    """余额为 0 时，自带密钥来源仍应放行（用户用自己的账号付费）。"""
-    with DB.tx() as c:
-        c.execute("UPDATE credit_wallet SET balance=0 WHERE id=1")
-    REGISTRY.register(_LocalVideoProvider(source="owned"))
-    client = TestClient(app)
-    pid = client.post("/api/projects", json={"idea": "零余额自有密钥测试三集竖屏短剧"},
-                      headers=HEADERS).json()["id"]
-    r = client.post(f"/api/projects/{pid}/generation/start", json={"shot_count": 12, "ability": "video"}, headers=HEADERS)
-    assert r.status_code == 200, r.text
+        n = c.execute("SELECT COUNT(*) FROM usage_events WHERE ok=1").fetchone()[0]
+    assert spent == 0, "纯开源版没有任何平台扣费"
+    assert n >= 2, "用量事件仍然要逐条记录"
 class _UnsupportedVideoProvider:
     """厂商根本没有视频端点（把图片模型填进视频槽就是这种）：提交直接 404。"""
     def __init__(self, source: str = "owned"):
@@ -176,20 +165,6 @@ class _UnsupportedVideoProvider:
         raise RuntimeError("provider_error: HTTP 404: not found")
     async def poll(self, task_id: str) -> GenResult:
         return GenResult(ok=False, fail_reason="unknown")
-def test_proxy_source_blocked_with_actionable_hint():
-    """平台额度来源且余额不足：必须拦下，并给出可执行的两条出路。"""
-    REGISTRY.register(_LocalVideoProvider(source="proxy"))
-    with DB.tx() as c:
-        c.execute("UPDATE credit_wallet SET balance=10 WHERE id=1")
-    client = TestClient(app)
-    pid = client.post("/api/projects", json={"idea": "额度不足拦截测试三集竖屏短剧"},
-                      headers=HEADERS).json()["id"]
-    r = client.post(f"/api/projects/{pid}/generation/start", json={"shot_count": 12, "ability": "video"}, headers=HEADERS)
-    assert r.status_code == 400
-    detail = r.json()["detail"]
-    assert detail["code"] == "E2001"
-    assert detail["need"] == 108.0 and detail["balance"] == 10.0
-    assert "充值" in detail["hint"] and "自己的 API 密钥" in detail["hint"]
 class _CapturingImageProvider:
     """记录收到提示词的图片 Provider：验证画面用的是真实分镜表。"""
     def __init__(self, source: str = "owned"):

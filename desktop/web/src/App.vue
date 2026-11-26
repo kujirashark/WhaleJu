@@ -2,15 +2,12 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
-import { useWalletStore } from '@/stores/wallet'
 import { useProjectStore } from '@/stores/project'
 import { engine } from '@/api/engine'
 const route = useRoute()
 const router = useRouter()
 const ui = useUiStore()
-const wallet = useWalletStore()
 const project = useProjectStore()
-const payPlan = computed(() => wallet.plan)
 const online = ref(false)
 const navItems = [
   { path: '/', label: '首页' },
@@ -33,11 +30,6 @@ function go(path: string) {
     return
   }
   router.push(path)
-}
-async function confirmPay() {
-  const amount = await wallet.recharge()
-  ui.payOpen = false
-  ui.toast(amount ? `额度已到账，本地账本已更新 +${Math.round(amount)}` : '支付未完成，本地引擎未响应')
 }
 async function openFolder(kind: 'data' | 'works') {
   ui.userMenuOpen = false
@@ -77,15 +69,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
     </nav>
     <div class="topbar-r">
       <div class="status"><i></i><span>{{ online ? '本地引擎已连接' : '引擎未连接' }}</span></div>
-      <button class="balance" @click="ui.payOpen = true" aria-label="充值额度">额度 <b>{{ wallet.balance.toFixed(1) }}</b></button>
       <button class="icobtn" @click="ui.toggleTheme()" :aria-label="ui.theme === 'dark' ? '切换浅色模式' : '切换深色模式'" v-html="ui.theme === 'dark'
         ? '<svg width=\'15\' height=\'15\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'1.7\' stroke-linecap=\'round\'><circle cx=\'12\' cy=\'12\' r=\'4\'/><path d=\'M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19\'/></svg>'
         : '<svg width=\'15\' height=\'15\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'1.7\' stroke-linecap=\'round\' stroke-linejoin=\'round\'><path d=\'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z\'/></svg>'"></button>
       <button class="avatar" @click="ui.userMenuOpen = !ui.userMenuOpen" aria-label="账户菜单" aria-haspopup="true">林</button>
       <div class="usermenu" :class="{ open: ui.userMenuOpen }" role="menu">
         <div class="um-hd">林 · 本地账户</div>
-        <button class="um-it" role="menuitem" @click="ui.userMenuOpen = false; ui.toast('本地账户，无云端资料；作品和密钥都在这台电脑上')">个人资料</button>
-        <button class="um-it" role="menuitem" @click="ui.userMenuOpen = false; ui.payOpen = true">我的额度 · 充值</button>
         <button class="um-it" role="menuitem" @click="openFolder('data')">打开本地数据文件夹</button>
         <button class="um-it" role="menuitem" @click="openFolder('works')">打开作品库文件夹</button>
         <button class="um-it" role="menuitem" @click="ui.userMenuOpen = false; ui.toast('缓存已清除，项目和密钥不受影响')">清除本机缓存</button>
@@ -94,23 +83,6 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
     </div>
   </header>
   <router-view />
-  <!-- 充值弹窗 -->
-  <div class="ov" :class="{ open: ui.payOpen }" role="dialog" aria-modal="true" aria-label="充值额度">
-    <div class="modal">
-      <div class="modal-h">充值额度</div>
-      <div class="modal-b">额度用来生成画面和视频。平台额度不用注册模型账号；如果你有自己的密钥，生成不消耗额度。</div>
-      <div class="plans">
-        <button v-for="p in [{ id: 'p1', t: '试用包', v: '¥49 · 50 额度', d: '够做 1 集，先试试' }, { id: 'p2', t: '创作月包', v: '¥99 · 200 额度', d: '3 集 × 2 轮返工' }, { id: 'p3', t: '年度包', v: '¥299 · 1000 额度', d: '长期创作最划算' }]" :key="p.id"
-          class="plan" :class="{ sel: payPlan === p.id }" @click="wallet.plan = p.id">
-          <span class="pt">{{ p.t }}</span><span class="pv">{{ p.v }}</span><span class="pd">{{ p.d }}</span>
-        </button>
-      </div>
-      <div class="modal-f">
-        <button class="btn btn-s" @click="ui.payOpen = false">先不用</button>
-        <button class="btn btn-p" @click="confirmPay">确认支付</button>
-      </div>
-    </div>
-  </div>
   <!-- 角色形象确认也走聊天窗口（见 stores/agent.ts 的 confirm_step），不再单独弹窗 -->
   <div class="toast" :class="{ show: !!ui.toastMsg }">{{ ui.toastMsg }}</div>
 </template>

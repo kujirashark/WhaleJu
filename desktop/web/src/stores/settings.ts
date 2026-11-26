@@ -4,12 +4,12 @@ import { engine } from '@/api/engine'
 /**
  * 模型设置槽位（去演示化）：
  * - 默认全部「未设置」，没有任何来源被假定可用。
- * - 每个来源（平台代采 / 自带密钥 / 本地模型）都必须填服务地址 + 模型标识。
+ * - 每个来源（自带密钥 / 本地模型）都必须填服务地址 + 模型标识。纯开源版无平台代采。
  * - 保存后状态为「待测试」，必须真实连接测试通过才可用于生成。
  * 密钥与配置只在内存暂存，提交后草稿清空，任何接口不回显明文。
  */
 export interface SlotDraft {
-  source: 'owned' | 'local' | 'proxy'
+  source: 'owned' | 'local'
   providerKind: string
   endpoint: string
   model: string
@@ -29,8 +29,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const serverSlots = ref<Record<string, any>>({})
   const probeResults = ref<Record<string, string>>({})
   const probing = ref<Record<string, boolean>>({})
-  const SOURCE_KIND: Record<string, SlotDraft['source']> = { key: 'owned', local: 'local', plat: 'proxy' }
-  /** 界面选项(key/local/plat) → 引擎来源(owned/local/proxy)，必须同步进草稿，
+  const SOURCE_KIND: Record<string, SlotDraft['source']> = { key: 'owned', local: 'local' }
+  /** 界面选项(key/local) → 引擎来源(owned/local)，必须同步进草稿，
    * 否则选了「本地」仍按 owned 提交，会误报需要密钥。 */
   function pick(slot: string, value: string) {
     slots.value[slot] = value
@@ -48,9 +48,8 @@ export const useSettingsStore = defineStore('settings', () => {
         // 只在服务端确实有配置时回写；不覆盖用户此刻正在点选的来源
         if (s === 'owned') slots.value[slot] = 'key'
         else if (s === 'local') slots.value[slot] = 'local'
-        else if (s === 'proxy') slots.value[slot] = 'plat'
-        // 回写草稿来源：刷新页面后再次保存不能把已有 local/proxy 配置覆盖成默认 owned
-        if (s === 'owned' || s === 'local' || s === 'proxy') {
+        // 回写草稿来源：刷新页面后再次保存不能把已有配置覆盖成默认 owned
+        if (s === 'owned' || s === 'local') {
           drafts.value[slot].source = s
           // 完整回填已保存配置：否则重开设置页输入框是空的，看起来像没保存
           if (i.endpoint) drafts.value[slot].endpoint = i.endpoint

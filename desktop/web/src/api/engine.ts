@@ -60,7 +60,7 @@ class EngineClient {
   online = false
   error = ''
   /** 最近一次接口错误的结构化详情（code/message/hint/need/balance），
-   *  供界面按错误类型给出正确出路（充值 / 去设置 / 等额度恢复）。 */
+   *  供界面按错误类型给出正确出路（去设置 / 检查厂商额度）。 */
   lastError: { code?: string; message?: string; hint?: string; need?: number; balance?: number } = {}
   mode: 'booting' | 'tauri' | 'browser' = 'booting'
   /** 连接完成的 Promise，供 UI 等待（避免 ref 追踪不到普通属性变化） */

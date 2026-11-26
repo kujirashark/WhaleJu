@@ -12,7 +12,6 @@ from pydantic import BaseModel, Field
 from .adapters.base import VideoGenRequest
 from .adapters.registry import ProviderRegistry
 from .adapters.loader import load_configured_providers
-from .billing.ledger import CreditLedger, InsufficientCredits
 from .storage.db import Database
 from .storage.assets import AssetStore
 from .storage.util import dumps, loads, ulid, utc_now
@@ -28,14 +27,13 @@ from .agent.agent import ConversationAgent, Intent
 from .publish.kit import PublishKit
 DATA_DIR = Path(os.getenv("MANGJU_DATA_DIR", str(Path.cwd() / "engine" / "data")))
 DB = Database(DATA_DIR / "mangju.db")
-LEDGER = CreditLedger(DB)
 WORKFLOW = WorkflowEngine()
 CHECKPOINTS = CheckpointManager(DB)
 AGENT = ConversationAgent()
 REGISTRY = ProviderRegistry()
 PUBLISH = PublishKit(DATA_DIR)
 ASSETS = AssetStore(DB, DATA_DIR)
-GENERATIONS = GenerationManager(DB, LEDGER, REGISTRY, ASSETS)
+GENERATIONS = GenerationManager(DB, REGISTRY, ASSETS)
 CONTENT = ContentGenerator(DB, REGISTRY, ASSETS)
 def refresh_providers() -> list[str]:
     """从本机配置重建真实 Provider 注册表（无任何配置时为空）。"""
@@ -182,16 +180,13 @@ class GenReq(BaseModel):
     duration_s: int = 5
     ratio: str = "9:16"
     importance: str = "transition"
-class RechargeReq(BaseModel):
-    plan_id: str = Field(pattern="^(p1|p2|p3)$")
 class SaveModelReq(BaseModel):
-    source: str = Field(pattern="^(owned|local|proxy)$")
+    source: str = Field(pattern="^(owned|local)$")
     provider_kind: str = Field(default="openai_compat", pattern="^(openai_compat|kling|jimeng|helo|ollama|comfyui)$")
     name: str = Field(min_length=1, max_length=60)
     endpoint: str = Field(min_length=8, max_length=500)   # 真实必填：所有来源都要有服务地址
     model: str = Field(min_length=1, max_length=120)      # 真实必填：模型标识
-    credential: str | None = None                          # local 可为空；owned/proxy 需密钥
-PLANS = {"p1": 50.0, "p2": 200.0, "p3": 1000.0}
+    credential: str | None = None                          # local 可为空；owned 需密钥
 SLOTS = ("text", "image", "video", "speech")
 def _public_slot(slot: str) -> dict:
     with DB.read() as c:
@@ -355,7 +350,6 @@ def get_project(pid: str, request: Request):
         "roles_locked": roles_locked,
         "latest_work": work_info,
         "resume_hint": f"当前状态：{p['status']}",
-        "credits_frozen": LEDGER.wallet()["frozen"],
     }
 class ScriptGenReq(BaseModel):
     version: int = Field(default=1, ge=1, le=99)
@@ -757,11 +751,6 @@ def advance(pid: str, step: int, req: AdvanceReq):
         except Exception:  # noqa: BLE001 - 锁定失败不阻断流程推进
             pass
     return {"project_status": nxt, "effects": list(effects)}
-@app.post("/api/wallet/recharge", dependencies=[Depends(auth)])
-def recharge(req: RechargeReq):
-    amount = PLANS[req.plan_id]
-    LEDGER.recharge(amount, ulid())
-    return {"state": "synced", "balance": LEDGER.wallet()["balance"], "amount": amount}
 class ChatReq(BaseModel):
     project_id: str | None = None
     message: str = Field(min_length=1, max_length=2000)
@@ -1102,9 +1091,6 @@ def system_capabilities():
             "装好后会自动识别；如果已安装，可在系统环境变量 WHALESHARK_FFMPEG 里指定 ffmpeg.exe 的完整路径。"
         ),
     }
-@app.get("/api/wallet", dependencies=[Depends(auth)])
-def wallet():
-    return LEDGER.wallet()
 @app.get("/api/model-configs", dependencies=[Depends(auth)])
 def model_configs():
     return {"slots": {s: _public_slot(s) for s in SLOTS}}
@@ -1122,7 +1108,7 @@ def save_model_config(slot: str, req: SaveModelReq):
             "SELECT * FROM model_configs WHERE slot=? AND is_active=1", (slot,)
         ).fetchone()
         has_prev_key = bool(prev and prev["credential_cipher"])
-        if req.source in ("owned", "proxy") and not req.credential and not has_prev_key:
+        if req.source == "owned" and not req.credential and not has_prev_key:
             raise HTTPException(400, "这个来源需要填写 API 密钥")
         cipher = encrypt(req.credential) if req.credential else (prev["credential_cipher"] if has_prev_key else None)
         # 配置实质未变（地址/模型/来源/密钥都相同）时，直接沿用原 verified，
@@ -1219,10 +1205,8 @@ async def generation_start(pid: str, req: GenStartReq = GenStartReq()):
     能力选择：第 6 步「生成画面」默认走 image 能力（图片模型），
     这与界面语义一致，也让只配了文字+图片模型的用户能把流程走完；
     显式指定 video 时才走视频模型。
-    额度校验按来源区分：
-    - 用自己的 API 密钥（owned）/ 本机模型（local）→ 不消耗平台额度，直接放行；
-    - 用平台额度（proxy）→ 余额必须够跑完这批，否则明确拦下并给出出路。
-    过去不分来源一律按平台额度拦，用自己密钥的用户会被假额度卡死。
+    纯开源版没有平台额度：生成全部走你自己配置的厂商账号，
+    这里只做成本预估返回，不做任何余额拦截。
     """
     p = DB.get("projects", pid)
     if not p:
@@ -1247,36 +1231,21 @@ async def generation_start(pid: str, req: GenStartReq = GenStartReq()):
             "code": "E4001", "message": f"还没有配置可用的{want}模型",
             "hint": f"请先到「设置 → {where}」填写服务地址和模型，并点「测试连接」通过后再开始",
         })
-    route = REGISTRY.route(ability, "key")
-    uses_own_key = bool(route and route.source in ("owned", "local"))
     unit = PRICE_PER_IMAGE if ability == "image" else PRICE_PER_SHOT_ESTIMATE
-    wallet = LEDGER.wallet()
     need = unit * req.shot_count
-    if not uses_own_key and wallet["balance"] < need:
-        raise HTTPException(400, {
-            "code": "E2001",
-            "message": f"平台额度不够跑完这批：需要 {need:g}，当前余额 {wallet['balance']:g}",
-            "need": need,
-            "balance": wallet["balance"],
-            "hint": "两条路任选：顶栏「额度」充值后重试；或在「设置 → 生成视频」改成「用我自己的 API 密钥」，"
-                    "用你自己的账号计费，不消耗平台额度",
-        })
     batch = await GENERATIONS.start(pid, req.shot_count, ability=ability)
     advance_status(pid, "budget_confirmed",
-                   {"available": wallet["balance"], "required": need})
+                   {"required_estimate": need})
     return {
         "batch_id": batch.id, "queued": req.shot_count,
         "ability": ability,
         "unit_price": unit,
         "estimated_cost": need,
         "route_reason": (
-            "用你自己的 API 密钥生成，不消耗平台额度"
-            if uses_own_key else
-            f"用{'图片' if ability == 'image' else '视频'}模型逐个镜头生成，"
-            f"每个镜头 {unit:g} 额度，失败不计费"
+            f"用你自己的厂商账号生成：{'图片' if ability == 'image' else '视频'}模型逐个镜头跑，"
+            "消耗的是你自己的厂商额度，本软件不收费"
         ),
-        "billing": "own_key" if uses_own_key else "platform_credits",
-        "wallet": wallet,
+        "billing": "own_key",
     }
 PRICE_PER_SHOT_ESTIMATE = PRICE_PER_SHOT
 # PRICE_PER_IMAGE 从 workflow.generation 导入（唯一来源，避免两处价格不一致）
@@ -1491,22 +1460,20 @@ async def generation_submit(req: GenReq):
             "hint": "请先到设置里配置视频模型并测试连接通过",
         })
     provider = REGISTRY.get(route.provider_id)
-    # 自带密钥/本地模型来源不消耗平台额度（与批量生成同一口径）
-    consumes_credits = route.source == "proxy"
-    freeze_id = ""
-    if consumes_credits:
-        freeze_id = LEDGER.freeze(req.duration_s * 0.9, "smoke", route.provider_id, "video")
     try:
         tid = await provider.submit(VideoGenRequest(prompt=req.prompt, duration_s=req.duration_s, ratio=req.ratio))
         result = await provider.poll(tid)
-    except Exception as exc:  # noqa: BLE001 - 边界：任何 Provider 异常都要退回冻结
-        if freeze_id:
-            LEDGER.settle(freeze_id, 0, False, "provider_error")
+    except Exception as exc:  # noqa: BLE001 - Provider 异常直接如实上报
         raise HTTPException(502, f"生成失败：{exc}")
-    if freeze_id:
-        LEDGER.settle(freeze_id, result.raw_cost_estimate, result.ok, result.fail_reason)
+    DB.insert("usage_events", {
+        "id": ulid(), "ts": utc_now(), "project_id": None,
+        "provider_id": route.provider_id, "source": route.source, "ability": "video",
+        "units": float(req.duration_s), "credits_spent": 0.0,
+        "raw_cost_estimate": result.raw_cost_estimate or 0.0,
+        "ok": 1 if result.ok else 0,
+    })
     return {
         "task_id": tid, "ok": result.ok, "asset_ref": result.asset_ref,
-        "route_reason": route.reason, "wallet": LEDGER.wallet(),
-        "billing": "platform_credits" if consumes_credits else "own_key",
+        "route_reason": route.reason,
+        "billing": "own_key",
     }

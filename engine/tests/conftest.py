@@ -32,7 +32,6 @@ def truncate_all(db) -> None:
         conn.execute("PRAGMA foreign_keys=OFF")
         for t in _TABLES:
             conn.execute(f"DELETE FROM {t}")
-        conn.execute("UPDATE credit_wallet SET balance=86.4, frozen=0 WHERE id=1")
         conn.commit()
     finally:
         conn.close()

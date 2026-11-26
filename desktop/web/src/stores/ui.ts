@@ -4,7 +4,6 @@ import { ref } from 'vue'
 export const useUiStore = defineStore('ui', () => {
   const theme = ref<'dark' | 'light'>('dark')
   const toastMsg = ref('')
-  const payOpen = ref(false)
   const userMenuOpen = ref(false)
   let toastTimer: ReturnType<typeof setTimeout> | undefined
   function applyTheme() {
@@ -24,8 +23,7 @@ export const useUiStore = defineStore('ui', () => {
     toastTimer = setTimeout(() => (toastMsg.value = ''), ms)
   }
   function closeAll() {
-    payOpen.value = false
     userMenuOpen.value = false
   }
-  return { theme, toastMsg, payOpen, userMenuOpen, applyTheme, toggleTheme, toast, closeAll }
+  return { theme, toastMsg, userMenuOpen, applyTheme, toggleTheme, toast, closeAll }
 })
