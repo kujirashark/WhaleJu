@@ -1,32 +1,37 @@
+# ===== 依赖 =====
 node_modules/
-prototype/node_modules/
-prototype/_shot*.png
-prototype/_v_*.png
-prototype/_check.js
-prototype/assets/*.png
-prototype/_check_*.js
-prototype/_w_*.png
-prototype/_3d_*.png
-prototype/_logo_*.png
-# Python venv & runtime data
 .venv/
-engine/data/
 __pycache__/
 *.pyc
 .pytest_cache/
-# UI QA screenshots
-prototype/_r*_*.png
-prototype/_3d_*.png
-prototype/_w_*.png
-prototype/_shot*.png
-prototype/_mmd*
-# Tauri build artifacts
+# ===== 运行数据（用户数据/生成素材/成片，永不提交）=====
+engine/data/
+desktop/web/_*.png
+# ===== 构建产物（开发者自行 build）=====
+desktop/frontend/
+desktop/web/dist/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/schemas/
-# Vue frontend source artifacts
-desktop/web/node_modules/
-desktop/web/dist/
-# test screenshots
-desktop/web/_*.png
-# nodemo test
-desktop/_test_nodemo.cjs
+# ===== 密钥与凭证（任何形式都不提交）=====
+.env
+.env.*
+*.key
+credentials*.json
+# ===== 临时/个人文件 =====
+.workbuddy/
+_shot.js
+*.log
+.DS_Store
+Thumbs.db
+# ===== 运营素材（抖音封面/视频工程，与软件本体无关）=====
+docs/make_cover*.py
+docs/*封面*.png
+docs/Vertical_*.png
+20261121/
+# ===== 旧验证截图（过程产物，README 截图进 docs/screenshots）=====
+docs/_验证-*.png
+# ===== 原型阶段产物 =====
+prototype/
+# ===== 临时测试脚本 =====
+desktop/_test_*.cjs
+desktop/_test_*.js
