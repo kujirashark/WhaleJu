@@ -15,8 +15,6 @@ const shotList = computed<any[]>(() => {
   const live = gen.visibleItems() as any[]
   return live.length ? live : ((gen.persisted || []) as any[])
 })
-const realCost = computed(() => Math.round(gen.items.reduce((a: number, b: any) => a + (b.cost || 0), 0) * 10) / 10)
-const money = (n: number) => `${n.toFixed(1)} 元`
 function statusChip(s: string) {
   if (s === 'done') return { cls: 'c-ok', text: '可用' }
   if (s === 'running') return { cls: 'c-run', text: '生成中' }
@@ -32,7 +30,7 @@ onMounted(() => { if (tab.value === 'calls') calls.load(80) })
     <div class="rtabs">
       <button :class="{ on: tab === 'shots' }" @click="project.tab = 'shots'">镜头</button>
       <button :class="{ on: tab === 'roles' }" @click="project.tab = 'roles'">角色</button>
-      <button :class="{ on: tab === 'cost' }" @click="project.tab = 'cost'">花费</button>
+      <button :class="{ on: tab === 'cost' }" @click="project.tab = 'cost'">用量</button>
       <button :class="{ on: tab === 'calls' }" @click="project.tab = 'calls'">日志</button>
     </div>
     <div class="rbody">
@@ -74,11 +72,9 @@ onMounted(() => { if (tab.value === 'calls') calls.load(80) })
       </template>
       <template v-else>
         <div class="metric"><div class="l">已生成镜头</div><div class="v">{{ done }}</div></div>
-        <div class="metric"><div class="l">失败（不计费）</div><div class="v">{{ gen.failed }}</div></div>
-        <div class="metric"><div class="l">已发生费用（引擎记账）</div><div class="v">{{ money(realCost) }}</div></div>
-        <div class="metric" style="border-bottom:none"><div class="l">失败花费</div><div class="v">0.0 元</div></div>
-        <div class="note">用量来自引擎的真实账单事件；成本按厂商公开单价估算，仅作参考。</div>
-        <button class="btn btn-t" @click="ui.toast('用量与成本以本机账本为准')">查看账本说明</button>
+        <div class="metric"><div class="l">失败镜头</div><div class="v">{{ gen.failed }}</div></div>
+        <div class="metric" style="border-bottom:none"><div class="l">总镜头数</div><div class="v">{{ gen.total || done }}</div></div>
+        <div class="note">用量数据来自引擎的真实任务事件，保存在本机。生成消耗的是你自己的厂商额度，本软件免费开源、不做任何收费。</div>
       </template>
     </div>
   </aside>

@@ -52,7 +52,7 @@ export const useGenStore = defineStore('gen', () => {
   const lastErrorBalance = ref<number | null>(null)
   /** 致命原因：厂商不支持这个能力（如把图片模型填进视频槽），已停批 */
   const fatalReason = ref('')
-  /** 本批次的生成口径：ability(image/video)、单价、预估花费、计费方式 */
+  /** 本批次的生成口径：ability(image/video)、单价、预估成本估算 */
   const ability = ref<'image' | 'video'>('image')
   const unitPrice = ref(0)
   const estimatedCost = ref(0)

@@ -21,7 +21,7 @@ const stepDesc = computed<Record<number, string>>(() => {
     2: chars ? `${chars} 个角色` : '还没定妆',
     3: chars ? '必须你确认' : '等第 3 步',
     4: shots ? `${shots} 个镜头` : '还没拆',
-    5: frames ? `${frames} 张画面` : '失败不计费',
+    5: frames ? `${frames} 张画面` : '按镜头生成',
     6: seconds ? `${seconds} 秒成片` : '还没生成',
     7: '导出成片',
   }

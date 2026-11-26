@@ -639,7 +639,7 @@ function downloadWork() {
                   <template v-if="it.status === 'edited'">描述已改，点「重新生成」才会用新描述</template>
                   <template v-else-if="it.status === 'done'">已生成 · {{ it.kind === 'video' ? '视频' : '图片' }}</template>
                   <template v-else-if="it.status === 'running'">正在生成…</template>
-                  <template v-else-if="it.status === 'failed'">{{ it.fail_reason || '生成失败' }}（不计费）</template>
+                  <template v-else-if="it.status === 'failed'">{{ it.fail_reason || '生成失败' }}（失败不消耗厂商额度）</template>
                   <template v-else>排队中</template>
                 </div>
               </div>

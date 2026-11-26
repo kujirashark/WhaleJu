@@ -342,8 +342,8 @@ export const useAgentStore = defineStore('agent', () => {
           setProgress('正在生成画面 0/12…')
           const finished = await watchGeneration()
           if (finished) {
-            appendStep(`✓ ${gen.total} 个镜头全部生成完成（失败 ${gen.failed} 个，不计费）`)
-            msg = `画面已生成完：${gen.total} 个镜头（失败 ${gen.failed} 个，不计费），去第 6 步看成片`
+            appendStep(`✓ ${gen.total} 个镜头全部生成完成（失败 ${gen.failed} 个）`)
+            msg = `画面已生成完：${gen.total} 个镜头（失败 ${gen.failed} 个），去第 6 步看成片`
           } else {
             appendStep(`已生成 ${gen.done}/${gen.total} 个，仍在后台继续`)
             msg = `已开始生成画面（${gen.done}/${gen.total}），进度在第 6 步看`
