@@ -47,7 +47,8 @@ def test_port_taken_by_other_program_explains_how_to_continue():
         r = _run(7439)
     finally:
         sock.close()
-    out = r.stdout + r.stderr
+    out = (r.stdout or "") + (r.stderr or "")  # 防御：个别 runner 可能返回 None
+    assert out or r.returncode is not None, f"子进程无输出：{r!r}"
     assert r.returncode == 2, f"应该以退出码 2 结束，实际 {r.returncode}"
     assert "不是本引擎" in out
     assert "--port" in out, "必须告诉用户怎么换端口"
@@ -79,7 +80,8 @@ def test_engine_already_running_is_detected():
         if not ready:
             return  # 环境不允许起引擎时跳过（不应让测试红）
         r = _run(7440)
-        out = r.stdout + r.stderr
+        out = (r.stdout or "") + (r.stderr or "")  # 防御：个别 runner 可能返回 None
+        assert out or r.returncode is not None, f"子进程无输出：{r!r}"
         assert r.returncode == 0, f"引擎已在跑时应正常退出，实际 {r.returncode}"
         assert "已经在" in out and "运行" in out
         assert "不要重复启动" in out
@@ -99,4 +101,4 @@ def test_run_script_exists_and_is_executable_entry():
         capture_output=True, text=True, timeout=60, cwd=str(ROOT),
     )
     assert r.returncode == 0
-    assert "--port" in r.stdout
+    assert "--port" in (r.stdout or "")
