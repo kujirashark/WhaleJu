@@ -47,6 +47,14 @@ def engine_alive(port: int, host: str = "127.0.0.1") -> bool:
 
 
 def main() -> int:
+    # CI/英文 Windows 控制台编码是 charmap（cp1252），中文提示会抛
+    # UnicodeEncodeError 直接崩；统一改写为 UTF-8 并容错替换不可编字符。
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and getattr(stream, "encoding", "").lower() not in ("utf-8", "utf8"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, OSError):
+                pass
     ap = argparse.ArgumentParser(description="启动鲸鲨漫剧本地引擎")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"监听端口（默认 {DEFAULT_PORT}）")
     ap.add_argument("--host", default="127.0.0.1")
