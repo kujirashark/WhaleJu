@@ -1,37 +1,55 @@
-name: Release（tag 触发，Windows 安装包）
+name: Release（tag 触发，远端构建 Windows 安装包）
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   build-windows:
-    name: 构建 Windows 安装包
+    name: build (windows-latest)
     runs-on: windows-latest
+    timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python（引擎 + PyInstaller）
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
-      - uses: swatinem/rust-cache@v2
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
         with:
-          workspaces: desktop/src-tauri
+          workspaces: desktop/src-tauri -> target
 
-      - name: 安装引擎依赖 + PyInstaller
+      - name: 引擎测试（142 用例）
         run: |
           python -m venv .venv
-          .venv\Scripts\pip install -r engine/requirements.txt pyinstaller
+          .venv\Scripts\pip install -r engine/requirements.txt
+          .venv\Scripts\python -m pytest engine/tests -q
+
+      - name: 安装 PyInstaller
+        run: .venv\Scripts\pip install pyinstaller
 
       - name: 前端类型检查与构建
         working-directory: desktop/web
@@ -39,7 +57,7 @@ jobs:
           npm ci
           npm run build
 
-      - name: PyInstaller 打包引擎
+      - name: PyInstaller 打包引擎（sidecar）
         run: >
           .venv\Scripts\pyinstaller --noconfirm --clean
           --distpath desktop/src-tauri/resources/engine
@@ -52,9 +70,14 @@ jobs:
         working-directory: desktop
         run: npx tauri build
 
-      - name: 上传构建产物
+      - name: 上传构建产物到 Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
+          name: WhaleJu ${{ github.ref_name }}
+          draft: false
+          prerelease: false
           files: |
-            desktop/src-tauri/target/release/bundle/nsis/*.exe
-            desktop/src-tauri/target/release/bundle/msi/*.msi
+            desktop/src-tauri/target/**/bundle/**/*.exe
+            desktop/src-tauri/target/**/bundle/**/*.msi
+          fail_on_unmatched_files: false
