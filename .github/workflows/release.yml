@@ -1,0 +1,60 @@
+name: Release（tag 触发，Windows 安装包）
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: 构建 Windows 安装包
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: 安装引擎依赖 + PyInstaller
+        run: |
+          python -m venv .venv
+          .venv\Scripts\pip install -r engine/requirements.txt pyinstaller
+
+      - name: 前端类型检查与构建
+        working-directory: desktop/web
+        run: |
+          npm ci
+          npm run build
+
+      - name: PyInstaller 打包引擎
+        run: >
+          .venv\Scripts\pyinstaller --noconfirm --clean
+          --distpath desktop/src-tauri/resources/engine
+          --workpath build/pyi
+          --name whaleju-engine
+          --add-data "engine/app/storage/schema.sql;engine/app/storage"
+          engine/frozen_entry.py
+
+      - name: Tauri 构建（NSIS + MSI）
+        working-directory: desktop
+        run: npx tauri build
+
+      - name: 上传构建产物
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+            desktop/src-tauri/target/release/bundle/msi/*.msi

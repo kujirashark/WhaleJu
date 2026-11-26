@@ -39,3 +39,7 @@ desktop/_test_*.js
 docs/AI漫剧*.md
 # ===== 抖音宣传视频工程（含第三方音乐，与软件本体无关）=====
 remotion-videos/
+
+# ===== Tauri 构建资源（PyInstaller 产物）=====
+desktop/src-tauri/resources/
+build/

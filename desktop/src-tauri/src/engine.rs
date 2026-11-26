@@ -67,31 +67,63 @@ impl EngineState {
             .map(|g| g.clone())
             .unwrap_or_default()
     }
-    pub fn start(&self, root: &Path) -> Result<EngineInfo, String> {
+    /// 打包模式：安装包内捆绑的 PyInstaller 引擎（resources/engine/whaleju-engine.exe）。
+    /// 存在则直接拉起，不再要求用户机器上有源码与 .venv。
+    fn bundled_engine(resource_dir: &Path) -> Option<std::path::PathBuf> {
+        let exe = resource_dir
+            .join("engine")
+            .join("whaleju-engine.exe");
+        exe.is_file().then_some(exe)
+    }
+    pub fn start(&self, root: &Path, resource_dir: &Path, data_root: &Path) -> Result<EngineInfo, String> {
         // 已在运行则直接复用（避免重复拉起子进程）
         if let Ok(info) = self.info.lock() {
             if info.running && info.port > 0 && port_open(info.port) {
                 return Ok(info.clone());
             }
         }
-        let python = find_python(root)?;
         let port = free_port();
         let token = random_token();
-        let data_dir = root.join("engine").join("data");
+        // 数据目录：打包模式落用户数据目录（AppData），开发模式沿用源码内 engine/data
+        let data_dir = if Self::bundled_engine(resource_dir).is_some() {
+            data_root.to_path_buf()
+        } else {
+            root.join("engine").join("data")
+        };
         std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
-        let mut cmd = Command::new(&python);
-        cmd.current_dir(root)
-            .args([
-                "-m",
-                "uvicorn",
-                "engine.app.main:app",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                &port.to_string(),
-                "--log-level",
-                "warning",
-            ])
+
+        let (program, args): (std::path::PathBuf, Vec<String>) =
+            if let Some(exe) = Self::bundled_engine(resource_dir) {
+                (
+                    exe.clone(),
+                    vec![
+                        "--host".into(),
+                        "127.0.0.1".into(),
+                        "--port".into(),
+                        port.to_string(),
+                        "--log-level".into(),
+                        "warning".into(),
+                    ],
+                )
+            } else {
+                let python = find_python(root)?;
+                (
+                    python.clone(),
+                    vec![
+                        "-m".into(),
+                        "uvicorn".into(),
+                        "engine.app.main:app".into(),
+                        "--host".into(),
+                        "127.0.0.1".into(),
+                        "--port".into(),
+                        port.to_string(),
+                        "--log-level".into(),
+                        "warning".into(),
+                    ],
+                )
+            };
+        let mut cmd = Command::new(&program);
+        cmd.args(&args)
             .env("MANGJU_LOCAL_TOKEN", &token)
             .env("MANGJU_DATA_DIR", &data_dir.to_string_lossy().to_string())
             .stdin(Stdio::null())
@@ -106,7 +138,7 @@ impl EngineState {
         }
         let mut child = cmd
             .spawn()
-            .map_err(|e| format!("启动引擎失败：{}（{}）", e, python.display()))?;
+            .map_err(|e| format!("启动引擎失败：{}（{}）", e, program.display()))?;
         // 轮询端口，最长 20 秒
         let mut ready = false;
         for _ in 0..80 {
@@ -120,7 +152,7 @@ impl EngineState {
             let _ = child.kill();
             return Err(format!(
                 "引擎 20 秒内未就绪。请检查 {} 与依赖安装（pip install -r engine/requirements.txt）",
-                python.display()
+                program.display()
             ));
         }
         let mut guard = self.child.lock().map_err(|e| e.to_string())?;
