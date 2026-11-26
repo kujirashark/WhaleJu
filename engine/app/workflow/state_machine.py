@@ -9,7 +9,7 @@ class Transition:
     current: str
     event: str
     next: str
-    guard: str | None = None       # trust_mode / budget_ok / sel_ge1 / roles_ready
+    guard: str | None = None       # trust_mode / sel_ge1 / roles_ready
     effects: tuple[str, ...] = ()
 TRANSITIONS: tuple[Transition, ...] = (
     Transition("DRAFT", "script_ready", "CP1_PENDING", effects=("gen_outline",)),
@@ -19,7 +19,7 @@ TRANSITIONS: tuple[Transition, ...] = (
     Transition("CHARACT", "roles_ready", "CP2_PENDING", guard="roles_ready", effects=("rank_candidates",)),
     Transition("CP2_PENDING", "approve", "PLANNED", guard="sel_ge1", effects=("lock_characters", "route_snapshot")),
     Transition("CP2_PENDING", "reject", "CHARACT", effects=("free_reroll",)),
-    Transition("PLANNED", "budget_confirmed", "RUNNING", guard="budget_ok", effects=("snapshot_route", "enqueue")),
+    Transition("PLANNED", "budget_confirmed", "RUNNING", effects=("snapshot_route", "enqueue")),
     Transition("RUNNING", "all_done", "CP3_PENDING", effects=("make_preview",)),
     Transition("RUNNING", "task_failed", "RUNNING", effects=("mark_failed_continue",)),
     Transition("CP3_PENDING", "approve", "DELIVER", effects=("enqueue_compose",)),
@@ -51,8 +51,6 @@ class WorkflowEngine:
             if t.current != current or t.event != event:
                 continue
             if t.guard and not self._check_guard(t.guard, ctx):
-                if t.guard == "budget_ok":
-                    raise GuardError("E2001", "额度不够了，充值后继续")
                 continue
             return t.next, t.effects
         raise GuardError("E3001", "这一步现在还不能确认")
@@ -60,8 +58,6 @@ class WorkflowEngine:
     def _check_guard(guard: str, ctx: dict) -> bool:
         if guard == "trust_mode":
             return bool(ctx.get("trust_mode"))
-        if guard == "budget_ok":
-            return float(ctx.get("available", 0)) >= float(ctx.get("required", 0))
         if guard == "sel_ge1":
             return len(ctx.get("selected") or []) >= 1
         if guard == "roles_ready":

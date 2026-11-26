@@ -42,11 +42,11 @@ def test_never_layer_cannot_skip_cp2_cp3():
         with pytest.raises(GuardError) as err:
             e.advance(state, "skip", skip=True)
         assert err.value.code == "E3002"
-def test_guard_budget_insufficient():
+def test_budget_confirmed_has_no_credit_guard():
+    """纯开源版：budget_confirmed 事件不做任何余额拦截。"""
     e = WorkflowEngine()
-    with pytest.raises(GuardError) as err:
-        e.advance("PLANNED", "budget_confirmed", {"available": 10, "required": 50})
-    assert err.value.code == "E2001"
+    nxt, _ = e.advance("PLANNED", "budget_confirmed", {"available": 0, "required": 50})
+    assert nxt == "RUNNING"
 def test_schema_tables():
     with DB.read() as c:
         tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
